@@ -171,8 +171,21 @@ def main():
     # interpreter without running the finally below, leaving the work directory
     # behind -- about 10MB for every interrupted render. Take the signal, clean
     # up, then die the way we would have anyway.
+    #
+    # Everything this run makes and has not yet cleaned up goes in here, because
+    # this handler is the only code that runs when a reload kills the render,
+    # and the output temp below is created long after the work directory is.
+    scratch = [work]
+
     def on_terminate(signum, _frame):
-        shutil.rmtree(work, ignore_errors=True)
+        for path in scratch:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
@@ -213,6 +226,7 @@ def main():
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out),
                                prefix="." + os.path.basename(out) + ".",
                                suffix=".tmp")
+    scratch.append(tmp)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(png(rows, W // 2, H // 2))

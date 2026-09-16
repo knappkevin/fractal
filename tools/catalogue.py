@@ -56,15 +56,17 @@ PHASES = (0.0, 0.25, 0.5, 0.75, 1.0)
 MIN_SEPARATION = 0.02      # in the plane; closer than this is the same place
 
 
-def ensure_perturb():
-    """The store of truth for a candidate point is a CPU renderer; build it once."""
-    if os.path.exists(PERTURB):
-        return
-    r = subprocess.run(["gcc", "-O2", "-fopenmp", "-o", PERTURB,
-                        os.path.join(HERE, "perturb.c"),
-                        "-lquadmath", "-lm"], stderr=subprocess.PIPE)
-    if r.returncode != 0:
-        raise SystemExit("could not build tools/perturb:\n" + r.stderr.decode())
+def require_perturb():
+    """The store of truth for a candidate point is a CPU renderer, and the
+    plugin ships it built.
+
+    Refuse to act without it rather than compiling one into the source tree: a
+    tool that manufactures a missing artifact is also a tool that will happily
+    run whatever it finds in its place. tools/build.sh makes it, and
+    tools/SHA256SUMS records what it should have produced.
+    """
+    if not os.path.exists(PERTURB):
+        raise SystemExit("tools/perturb is missing; run tools/build.sh first")
 
 
 def read_field(path):
@@ -155,7 +157,7 @@ def main():
         del args[i:i + 2]
     cand_path = args[0] if args else os.path.join(HERE, "candidates.txt")
 
-    ensure_perturb()
+    require_perturb()
     outdir = os.path.join(ROOT, "mandelbrot", "points")
     os.makedirs(outdir, exist_ok=True)
 
