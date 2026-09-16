@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "knappkevin.fractal",
+  "name": "Fractal Wallpaper",
+  "version": "1.0.0",
+  "author": "Kevin Knapp",
+  "description": "An endless zoom into a fractal, drawn in the active theme's colours.",
+  "license": "MIT",
+  "kinds": ["service"],
+  "entryPoints": { "service": "Service.qml" }
+}

@@ -1,0 +1,31 @@
+{
+  "points": [
+    "antler",
+    "bramble",
+    "claw",
+    "dagger",
+    "dragon",
+    "lattice",
+    "lightning",
+    "lizard",
+    "snowflake",
+    "star",
+    "thistle",
+    "thorns"
+  ],
+  "octaves": {
+    "antler": 9.3658,
+    "bramble": 6.7379,
+    "claw": 4.6851,
+    "dagger": 9.1446,
+    "dragon": 1.0446,
+    "lattice": 7.15,
+    "lightning": 3.3951,
+    "lizard": 3.8925,
+    "snowflake": 4.0003,
+    "star": 7.0237,
+    "thistle": 3.3351,
+    "thorns": 4.9412
+  },
+  "default": "snowflake"
+}
