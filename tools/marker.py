@@ -223,7 +223,19 @@ def main():
     # it as a symlink and have the encode follow it; mkstemp creates the file
     # exclusively instead. The leading dot and the .tmp suffix keep the picker's
     # *.png scan from matching it.
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out),
+    #
+    # The seeder's rule, applied on this side too: write only through a plain
+    # directory, never through a link that could point somewhere else. There is
+    # no privilege to gain here -- anything able to plant the link is already
+    # running as this user -- but both paths write the same file to the same
+    # directory, so they should agree, and a path that has been misconfigured
+    # should fail loudly rather than quietly put the image where the picker will
+    # never look.
+    destdir = os.path.dirname(out)
+    if os.path.islink(destdir):
+        raise SystemExit("refusing to write through a symlinked directory: " + destdir)
+
+    fd, tmp = tempfile.mkstemp(dir=destdir,
                                prefix="." + os.path.basename(out) + ".",
                                suffix=".tmp")
     scratch.append(tmp)
