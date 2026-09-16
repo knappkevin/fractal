@@ -2,6 +2,7 @@
 # by the tools that need them. Never committed: a reviewer cannot check a binary
 # against the source they read, so the source is the only thing that ships.
 tools/perturb
+tools/palette
 tools/mis
 
 __pycache__/

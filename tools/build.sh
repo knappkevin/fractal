@@ -11,8 +11,10 @@ QSB=/usr/lib/qt6/bin/qsb
 # Native tools are rebuilt from the source in this directory every time, never
 # shipped prebuilt: a committed binary cannot be shown to come from the source a
 # reviewer read. perturb is the CPU reference the catalogue gates points against
-# and the marker renderer draws from; mis locates Misiurewicz points in a box.
+# and the marker renderer draws from; palette turns its escape counts into the
+# picker image's scanlines; mis locates Misiurewicz points in a box.
 gcc -O2 -fopenmp -o tools/perturb tools/perturb.c -lquadmath -lm
+gcc -O2 -o tools/palette tools/palette.c -lm
 gcc -O2 -o tools/mis tools/mis.c -lm
 
 rm -f mandelbrot/shaders/*.frag mandelbrot/shaders/*.frag.qsb

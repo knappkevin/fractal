@@ -4,7 +4,8 @@
 The marker is what the switcher shows and what gets *set* as the wallpaper, so it
 should look like the frame the shader draws for that point at the same phase.
 It reuses tools/perturb.c, the same CPU reference the catalogue gates points
-with, so the two cannot drift apart.
+with, so the two cannot drift apart, and tools/palette.c turns that renderer's
+escape counts into this image's scanlines.
 
 usage: marker.py <points/name.json> <phase> <out.png> [colour ...]
 env:   MBSIZE_W / MBSIZE_H   render size, default 1920x1080
@@ -13,6 +14,7 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -22,6 +24,10 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PERTURB = os.path.join(HERE, "perturb")
+PALETTE = os.path.join(HERE, "palette")
+
+# The ramp is resolved to this many steps before the helper sees it.
+LUT_N = 1 << 10
 
 THEME_COLORS = os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml")
 
@@ -70,6 +76,22 @@ FULL_HW = 2.5
 PAL = []
 
 
+def build(target, source, flags):
+    """Compile one of the helpers from the source beside it, once.
+
+    gcc locates cc1, as and ld by searching PATH. The shell hands this script a
+    cleared environment with HOME and nothing else, so without the PATH set
+    below it dies with "cannot execute 'cc1'" and the render falls back to the
+    shipped still -- a picture of another theme.
+    """
+    if os.path.exists(target):
+        return
+    env = dict(os.environ)
+    env["PATH"] = env.get("PATH") or "/usr/bin:/bin"
+    subprocess.run(["gcc", "-O2", "-o", target, os.path.join(HERE, source)] + flags,
+                   check=True, env=env)
+
+
 def rgb(spec):
     spec = spec.strip()
     return tuple(int(spec[i:i + 2], 16) / 255 for i in (1, 3, 5))
@@ -94,69 +116,63 @@ def palette(t):
     return tuple(a[i] + (b[i] - a[i]) * m for i in range(3))
 
 
+def lut_bytes():
+    """The same ramp, resolved to LUT_N entries of eight bit RGB.
+
+    Resolved here rather than in the helper, so the palette, the smoothstep and
+    the colours of the moment stay in one place and the table cannot drift from
+    what the shader draws.
+    """
+    return b"".join(bytes((int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
+                    for c in (palette(i / LUT_N) for i in range(LUT_N)))
+
+
 def main():
     global PAL
     point_path, phase, out = sys.argv[1], float(sys.argv[2]), sys.argv[3]
     PAL = [rgb(c) for c in (sys.argv[4:8] or live_ramp())]
     pt = json.load(open(point_path))
 
-    if not os.path.exists(PERTURB):
-        # gcc locates cc1, as and ld by searching PATH. The shell hands this
-        # script a cleared environment with HOME and nothing else, so without
-        # this it dies with "cannot execute 'cc1'" and the render falls back to
-        # the shipped still -- a picture of another theme.
-        env = dict(os.environ)
-        env["PATH"] = env.get("PATH") or "/usr/bin:/bin"
-        subprocess.run(["gcc", "-O2", "-fopenmp", "-o", PERTURB,
-                        os.path.join(HERE, "perturb.c"),
-                        "-lquadmath", "-lm"], check=True, env=env)
-
-    # Unique names created O_EXCL, not fixed names under /tmp: a predictable path
-    # in a shared directory is one another user can pre-create as a symlink and
-    # have this write follow.
-    fd, orb = tempfile.mkstemp(prefix="fractal-orbit.")
-    with os.fdopen(fd, "w") as fh:
-        for k, (re, im) in enumerate(pt["orbit"]):
-            fh.write("%d %.34e %.34e\n" % (k, re, im))
+    build(PERTURB, "perturb.c", ["-fopenmp", "-lquadmath", "-lm"])
+    build(PALETTE, "palette.c", ["-lm"])
 
     hw = pt["half_w0"] * 2.0 ** (-pt["oct_per_loop"] * phase)
     rot = pt["rot_per_loop"] * phase
-    fd, field = tempfile.mkstemp(prefix="fractal-field.")
-    os.close(fd)
-    try:
-        subprocess.run([PERTURB, orb, str(pt["q"]), str(pt["p"]), repr(hw), repr(rot),
-                        str(pt["maxiter"]), str(W), str(H), field], check=True,
-                       stderr=subprocess.DEVNULL)
-        with open(field, "rb") as fh:
-            raw = fh.read()
-    finally:
-        os.remove(field)
-        os.remove(orb)
-
-    vals = struct.unpack("<%df" % (len(raw) // 4), raw)
-
-    # The palette runs through a lookup table rather than a function call per
-    # pixel. Evaluating the ramp two million times cost about five seconds, which
-    # was the entire reason the thumbnail took seconds to appear; the table
-    # resolves the same ramp to a thousandth of a cycle, well under one step of
-    # the eight bit output.
-    lut_bits = 10
-    lut_n = 1 << lut_bits
-    lut = [bytes((int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)))
-           for c in (palette(i / lut_n) for i in range(lut_n))]
 
     # Same expression as the shader: the palette is anchored to the frame's own
     # floor, not to zero, and the drift is the period.
     scale = pt["pal_scale"]
     base = pt["pal_offset"] + pt["p"] * phase
-    mask = lut_n - 1
 
-    px = bytearray()
-    for v in vals:
-        if v < 0:
-            px += b"\x00\x00\x00"
-        else:
-            px += lut[int(((scale * (v - base)) % 1.0) * lut_n) & mask]
+    # One private directory for the whole run, created exclusively and 0700. A
+    # shared directory would let another user pre-create any of these names as a
+    # symlink and have a write follow it. It is also what makes an interrupted
+    # run tidy: a plugin reload kills this process before the cleanup below can
+    # run, and one directory is a single thing to sweep where four files were
+    # four.
+    work = tempfile.mkdtemp(prefix="fractal-")
+    orb = os.path.join(work, "orbit.txt")
+    field = os.path.join(work, "field.bin")
+    lutfile = os.path.join(work, "lut.bin")
+    rowsfile = os.path.join(work, "rows.bin")
+    try:
+        with open(orb, "w") as fh:
+            for k, (re, im) in enumerate(pt["orbit"]):
+                fh.write("%d %.34e %.34e\n" % (k, re, im))
+        with open(lutfile, "wb") as fh:
+            fh.write(lut_bytes())
+        subprocess.run([PERTURB, orb, str(pt["q"]), str(pt["p"]), repr(hw), repr(rot),
+                        str(pt["maxiter"]), str(W), str(H), field], check=True,
+                       stderr=subprocess.DEVNULL)
+        # Resolving the ramp, flipping the frame and averaging it down are a pass
+        # over two million values, which is where the time went. The helper does
+        # the whole pass in C and hands back finished PNG scanlines.
+        subprocess.run([PALETTE, field, lutfile, str(W), str(H), repr(scale),
+                        repr(base), rowsfile], check=True)
+        with open(rowsfile, "rb") as fh:
+            rows = fh.read()
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
     # Written beside the destination and renamed into place. Writing the
     # destination directly leaves a truncated image visible for the length of the
@@ -169,48 +185,12 @@ def main():
     tmp = out + ".part"
     try:
         with open(tmp, "wb") as fh:
-            fh.write(png(halve(px, W, H), W // 2, H // 2))
+            fh.write(png(rows, W // 2, H // 2))
         os.replace(tmp, out)
     finally:
         if os.path.exists(tmp):
             os.remove(tmp)
     print("wrote %s from %s at phase %.2f (%dx%d)" % (out, pt["name"], phase, W // 2, H // 2))
-
-
-def halve(px, w, h):
-    """Flip vertically and halve both axes.
-
-    The renderer counts rows from the top and the shader counts them from the
-    bottom, so matching the shader means reversing the rows. Halving is a 2x2
-    box average, the exact filter for a factor of two: every input pixel is read
-    once and it cannot ring.
-
-    Worked a channel at a time over the whole frame rather than per pixel. The
-    arithmetic is the same, but a plain per-pixel loop over half a million
-    pixels costs about two seconds in Python, which is most of the time this
-    script spends.
-    """
-    out_w, out_h = w // 2, h // 2
-    stride = w * 3
-
-    row = lambda i: i * stride
-    flipped = b"".join(px[row(i):row(i + 1)] for i in range(h - 1, -1, -1))
-    top = b"".join(flipped[row(i):row(i + 1)] for i in range(0, h, 2))
-    bottom = b"".join(flipped[row(i):row(i + 1)] for i in range(1, h, 2))
-
-    image = bytearray(out_w * out_h * 3)
-    for channel in range(3):
-        plane = top[channel::3]
-        under = bottom[channel::3]
-        image[channel::3] = bytes(
-            (a + b + c + d) >> 2
-            for a, b, c, d in zip(plane[0::2], plane[1::2], under[0::2], under[1::2]))
-
-    rows = bytearray()
-    for y in range(out_h):
-        rows.append(0)  # PNG filter type for this scanline: none
-        rows += image[y * out_w * 3:(y + 1) * out_w * 3]
-    return rows
 
 
 def png(rows, width, height):
