@@ -52,7 +52,8 @@ def ensure_perturb():
     """The store of truth for a candidate point is a CPU renderer; build it once."""
     if os.path.exists(PERTURB):
         return
-    r = subprocess.run(["gcc", "-O2", "-o", PERTURB, os.path.join(HERE, "perturb.c"),
+    r = subprocess.run(["gcc", "-O2", "-fopenmp", "-o", PERTURB,
+                        os.path.join(HERE, "perturb.c"),
                         "-lquadmath", "-lm"], stderr=subprocess.PIPE)
     if r.returncode != 0:
         raise SystemExit("could not build tools/perturb:\n" + r.stderr.decode())

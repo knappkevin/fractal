@@ -21,16 +21,7 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-
-# The helper is compiled into a private per-user directory, never beside the
-# source. The plugin tree is reviewed source: a binary sitting in it is one the
-# repository does not contain, so no update can restore it and no reviewer ever
-# saw it. Still built from the source that shipped, but kept where nothing else
-# is looking for something to run.
-STATE = os.path.join(os.environ.get("XDG_STATE_HOME")
-                     or os.path.join(os.path.expanduser("~"), ".local", "state"),
-                     "omarchy", "fractal")
-PERTURB = os.path.join(STATE, "perturb")
+PERTURB = os.path.join(HERE, "perturb")
 
 THEME_COLORS = os.path.expanduser("~/.local/state/omarchy/current/theme/colors.toml")
 
@@ -110,14 +101,14 @@ def main():
     pt = json.load(open(point_path))
 
     if not os.path.exists(PERTURB):
-        os.makedirs(STATE, mode=0o700, exist_ok=True)
         # gcc locates cc1, as and ld by searching PATH. The shell hands this
         # script a cleared environment with HOME and nothing else, so without
         # this it dies with "cannot execute 'cc1'" and the render falls back to
         # the shipped still -- a picture of another theme.
         env = dict(os.environ)
         env["PATH"] = env.get("PATH") or "/usr/bin:/bin"
-        subprocess.run(["gcc", "-O2", "-o", PERTURB, os.path.join(HERE, "perturb.c"),
+        subprocess.run(["gcc", "-O2", "-fopenmp", "-o", PERTURB,
+                        os.path.join(HERE, "perturb.c"),
                         "-lquadmath", "-lm"], check=True, env=env)
 
     # Unique names created O_EXCL, not fixed names under /tmp: a predictable path

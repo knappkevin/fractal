@@ -5,7 +5,7 @@
 // something independent to be checked against and so a candidate point can be
 // judged before it is shipped.
 //
-// Build: gcc -O2 -o perturb perturb.c -lquadmath -lm
+// Build: gcc -O2 -fopenmp -o perturb perturb.c -lquadmath -lm
 //
 //   perturb <orbitfile> <q> <p> <halfwidth> <rotturns> <maxiter> <W> <H> <out.bin>
 //
@@ -63,6 +63,11 @@ int main(int argc, char **argv) {
   long long escaped = 0, total = (long long)W * H;
   double worst = 0;
 
+  // Rows are independent, and the only shared state is the two accumulators,
+  // both of which reduce exactly: an integer count and a maximum. Compiled
+  // without -fopenmp the pragma is ignored and this is the serial loop it was,
+  // so the flag is an optimisation rather than a requirement.
+#pragma omp parallel for reduction(+:escaped) reduction(max:worst) schedule(static)
   for (int j = 0; j < H; j++) {
     for (int i = 0; i < W; i++) {
       double u = ((i + 0.5) / W - 0.5) * 2 * hw;

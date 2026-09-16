@@ -12,7 +12,7 @@ QSB=/usr/lib/qt6/bin/qsb
 # shipped prebuilt: a committed binary cannot be shown to come from the source a
 # reviewer read. perturb is the CPU reference the catalogue gates points against
 # and the marker renderer draws from; mis locates Misiurewicz points in a box.
-gcc -O2 -o tools/perturb tools/perturb.c -lquadmath -lm
+gcc -O2 -fopenmp -o tools/perturb tools/perturb.c -lquadmath -lm
 gcc -O2 -o tools/mis tools/mis.c -lm
 
 rm -f mandelbrot/shaders/*.frag mandelbrot/shaders/*.frag.qsb
