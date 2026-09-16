@@ -57,6 +57,9 @@ int main(int argc, char **argv) {
     return 2;
   }
 
+  // W and H are ints, so the largest byte count either allocation below can ask
+  // for is 4*(2^31-1)^2, which still fits a 64 bit size_t. The only failure left
+  // is a refused allocation, and that exits rather than being worked around.
   float *field = malloc(sizeof(float) * (size_t)W * (size_t)H);
   unsigned char lut[LUT_N * 3];
   if (!field) return 1;

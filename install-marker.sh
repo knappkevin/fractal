@@ -32,9 +32,6 @@ state_root="$HOME/.local/state/omarchy"
 
 mkdir -p -- "$dest" 2>/dev/null || fail "cannot create $dest"
 [ -O "$dest" ] || fail "$dest is not ours"
-# cp follows a symlink at the destination, so a planted one would turn this into
-# a write anywhere the user can reach.
-[ ! -L "$dest/$marker" ] || fail "$dest/$marker is a symlink"
 
 # Seeding only. A rendered image is current; this one is a picture of some other
 # theme and would replace it with something wrong.
@@ -42,6 +39,13 @@ if [ -e "$dest/$marker" ]; then
   exit 0
 fi
 
-cp -- "$src/assets/$marker" "$dest/$marker" || fail "could not install $marker"
+# Copied to an unpredictable name in the destination's own directory and renamed
+# into place, the way the other plugins write their state. Copying straight to
+# the destination would let anything running as this user plant a symlink there
+# for the copy to follow; rename replaces the entry itself, so it cannot. That
+# also leaves the existence check above as a fast path rather than a guarantee.
+tmp=$(mktemp -- "$dest/.$marker.XXXXXX.tmp") || fail "cannot create a temporary file in $dest"
+cp -- "$src/assets/$marker" "$tmp" || { rm -f -- "$tmp"; fail "could not copy $marker"; }
+mv -- "$tmp" "$dest/$marker" || { rm -f -- "$tmp"; fail "could not install $marker"; }
 
 exit 0

@@ -19,9 +19,11 @@ it does have to be big enough or the deep filaments go black.
 
 usage: catalogue.py [--only name] [--keep] [candidates.txt]
 """
+import atexit
 import json
 import math
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -33,6 +35,12 @@ PREFIX = os.path.join(HERE, "refine.py")
 MKPOINT = os.path.join(HERE, "mkpoint.py")
 PERTURB = os.path.join(HERE, "perturb")
 PYPY = sys.executable
+
+# One private directory for the whole run -- created exclusively and 0700 --
+# rather than predictable names in a shared one, where anything running as this
+# user could pre-create a name as a symlink and have a write follow it.
+WORK = tempfile.mkdtemp(prefix="catalogue-")
+atexit.register(shutil.rmtree, WORK, True)
 
 GRID_W, GRID_H = 240, 136
 MEASURE_BUDGET = 4000      # generous; only used to observe the point
@@ -65,7 +73,7 @@ def read_field(path):
 
 
 def field_for(orbit, q, p, half_w, rot, budget, tag):
-    out = os.path.join(tempfile.gettempdir(), "catalogue_%s.bin" % tag)
+    out = os.path.join(WORK, "catalogue_%s.bin" % tag)
     r = subprocess.run([PERTURB, orbit, str(q), str(p), repr(half_w), repr(rot),
                         str(budget), str(GRID_W), str(GRID_H), out],
                        stderr=subprocess.PIPE)
@@ -98,7 +106,7 @@ def score(pt, tag):
     """Return ((drift, spread), worst, half_w), or a reason string if unusable."""
     c_re, c_im = pt["c_re"], pt["c_im"]
     q, p = pt["q"], pt["p"]
-    orbit = os.path.join(tempfile.gettempdir(), "catalogue_%s.orb" % tag)
+    orbit = os.path.join(WORK, "catalogue_%s.orb" % tag)
     with open(orbit, "w") as fh:
         for k, (re, im) in enumerate(pt["orbit"]):
             fh.write("%d %.34e %.34e\n" % (k, re, im))
@@ -174,7 +182,7 @@ def main():
             skipped.append(name)
             continue
 
-        tmp = os.path.join(tempfile.gettempdir(), "catalogue_%s.ref" % name)
+        tmp = os.path.join(WORK, "catalogue_%s.ref" % name)
         r = subprocess.run([PYPY, PREFIX, re, im, str(q), str(p)],
                            stdout=open(tmp, "w"), stderr=subprocess.PIPE)
         if r.returncode != 0:

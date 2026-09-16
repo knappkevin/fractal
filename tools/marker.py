@@ -15,16 +15,19 @@ import math
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PERTURB = os.path.join(HERE, "perturb")
 PALETTE = os.path.join(HERE, "palette")
+GCC = "/usr/bin/gcc"
 
 # The ramp is resolved to this many steps before the helper sees it.
 LUT_N = 1 << 10
@@ -77,19 +80,53 @@ PAL = []
 
 
 def build(target, source, flags):
-    """Compile one of the helpers from the source beside it, once.
+    """Compile one of the helpers from the source beside it, when it is behind.
+
+    A helper is rebuilt whenever the source is newer than the binary built from
+    it. Testing only for the binary's existence would mean an updated plugin
+    kept running the helper compiled from the previous source -- so the code
+    that was reviewed would not be the code that runs, and nothing short of
+    deleting the binary by hand would ever notice.
 
     gcc locates cc1, as and ld by searching PATH. The shell hands this script a
     cleared environment with HOME and nothing else, so without the PATH set
     below it dies with "cannot execute 'cc1'" and the render falls back to the
     shipped still -- a picture of another theme.
     """
+    src = os.path.join(HERE, source)
     if os.path.exists(target):
-        return
+        # A missing source is a broken install, not a reason to refuse to run;
+        # use the binary that is there rather than failing the render outright.
+        if not os.path.exists(src) or os.path.getmtime(target) >= os.path.getmtime(src):
+            return
     env = dict(os.environ)
     env["PATH"] = env.get("PATH") or "/usr/bin:/bin"
-    subprocess.run(["gcc", "-O2", "-o", target, os.path.join(HERE, source)] + flags,
-                   check=True, env=env)
+    subprocess.run([GCC, "-O2", "-o", target, src] + flags, check=True, env=env)
+
+
+def sweep(keep):
+    """Remove work directories left by runs that were killed outright.
+
+    A reload takes the render down with SIGTERM, which the handler below turns
+    into a clean exit; this covers the rest, a SIGKILL or a crash, where nothing
+    gets to run at all. Only directories old enough that no render can still be
+    using them.
+    """
+    tmpdir = tempfile.gettempdir()
+    cutoff = time.time() - 6 * 3600
+    try:
+        names = os.listdir(tmpdir)
+    except OSError:
+        return
+    for name in names:
+        if not name.startswith("fractal-") or name == os.path.basename(keep):
+            continue
+        path = os.path.join(tmpdir, name)
+        try:
+            if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def rgb(spec):
@@ -146,15 +183,26 @@ def main():
 
     # One private directory for the whole run, created exclusively and 0700. A
     # shared directory would let another user pre-create any of these names as a
-    # symlink and have a write follow it. It is also what makes an interrupted
-    # run tidy: a plugin reload kills this process before the cleanup below can
-    # run, and one directory is a single thing to sweep where four files were
-    # four.
+    # symlink and have a write follow it, and one directory is a single thing to
+    # sweep where four loose files were four.
     work = tempfile.mkdtemp(prefix="fractal-")
+    sweep(work)
     orb = os.path.join(work, "orbit.txt")
     field = os.path.join(work, "field.bin")
     lutfile = os.path.join(work, "lut.bin")
     rowsfile = os.path.join(work, "rows.bin")
+
+    # A plugin reload ends the render with SIGTERM, which by default stops the
+    # interpreter without running the finally below, leaving the work directory
+    # behind -- about 10MB for every interrupted render. Take the signal, clean
+    # up, then die the way we would have anyway.
+    def on_terminate(signum, _frame):
+        shutil.rmtree(work, ignore_errors=True)
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    signal.signal(signal.SIGTERM, on_terminate)
+    signal.signal(signal.SIGINT, on_terminate)
     try:
         with open(orb, "w") as fh:
             for k, (re, im) in enumerate(pt["orbit"]):
@@ -174,17 +222,24 @@ def main():
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    # Written beside the destination and renamed into place. Writing the
-    # destination directly leaves a truncated image visible for the length of the
-    # encode, and the background picker scans that directory: it cached a
-    # half-written file and showed that instead of the real one. A rename is
-    # atomic, so a reader sees either the previous image or the new one.
+    # Written to an unpredictable name in the destination's own directory, then
+    # renamed into place -- the same idiom the other plugins use for their state
+    # files. Writing the destination directly leaves a truncated image visible
+    # for the length of the encode, and the background picker scans that
+    # directory: it cached a half-written file and showed that instead of the
+    # real one. A rename is atomic, so a reader sees either the previous image
+    # or the new one, and rename replaces the destination entry itself rather
+    # than following a symlink planted there.
     #
-    # The temporary keeps the .part suffix so the picker's *.png scan cannot
-    # match it.
-    tmp = out + ".part"
+    # A fixed temporary name would let anything running as this user pre-create
+    # it as a symlink and have the encode follow it; mkstemp creates the file
+    # exclusively instead. The leading dot and the .tmp suffix keep the picker's
+    # *.png scan from matching it.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(out),
+                               prefix="." + os.path.basename(out) + ".",
+                               suffix=".tmp")
     try:
-        with open(tmp, "wb") as fh:
+        with os.fdopen(fd, "wb") as fh:
             fh.write(png(rows, W // 2, H // 2))
         os.replace(tmp, out)
     finally:
