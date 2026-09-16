@@ -3,9 +3,9 @@
 
 The marker is what the switcher shows and what gets *set* as the wallpaper, so it
 should look like the frame the shader draws for that point at the same phase.
-It reuses tools/perturb.c, the same CPU reference the catalogue gates points
-with, so the two cannot drift apart, and tools/palette.c turns that renderer's
-escape counts into this image's scanlines.
+It runs tools/perturb, the same CPU reference the catalogue gates points with,
+so the two cannot drift apart, and tools/palette turns that renderer's escape
+counts into this image's scanlines. Both ship built, by tools/build.sh.
 
 usage: marker.py <points/name.json> <phase> <out.png> [colour ...]
 env:   MBSIZE_W / MBSIZE_H   render size, default 1920x1080
@@ -27,7 +27,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PERTURB = os.path.join(HERE, "perturb")
 PALETTE = os.path.join(HERE, "palette")
-GCC = "/usr/bin/gcc"
 
 # The ramp is resolved to this many steps before the helper sees it.
 LUT_N = 1 << 10
@@ -77,31 +76,6 @@ H = int(os.environ.get("MBSIZE_H", 1080))
 FULL_HW = 2.5
 
 PAL = []
-
-
-def build(target, source, flags):
-    """Compile one of the helpers from the source beside it, when it is behind.
-
-    A helper is rebuilt whenever the source is newer than the binary built from
-    it. Testing only for the binary's existence would mean an updated plugin
-    kept running the helper compiled from the previous source -- so the code
-    that was reviewed would not be the code that runs, and nothing short of
-    deleting the binary by hand would ever notice.
-
-    gcc locates cc1, as and ld by searching PATH. The shell hands this script a
-    cleared environment with HOME and nothing else, so without the PATH set
-    below it dies with "cannot execute 'cc1'" and the render falls back to the
-    shipped still -- a picture of another theme.
-    """
-    src = os.path.join(HERE, source)
-    if os.path.exists(target):
-        # A missing source is a broken install, not a reason to refuse to run;
-        # use the binary that is there rather than failing the render outright.
-        if not os.path.exists(src) or os.path.getmtime(target) >= os.path.getmtime(src):
-            return
-    env = dict(os.environ)
-    env["PATH"] = env.get("PATH") or "/usr/bin:/bin"
-    subprocess.run([GCC, "-O2", "-o", target, src] + flags, check=True, env=env)
 
 
 def sweep(keep):
@@ -170,9 +144,10 @@ def main():
     PAL = [rgb(c) for c in (sys.argv[4:8] or live_ramp())]
     pt = json.load(open(point_path))
 
-    build(PERTURB, "perturb.c", ["-fopenmp", "-lquadmath", "-lm"])
-    build(PALETTE, "palette.c", ["-lm"])
-
+    # The helpers are shipped built, by tools/build.sh, and recorded in
+    # tools/SHA256SUMS. Nothing is compiled here: a binary built at render time
+    # would be one the repository does not contain, executed from a directory
+    # anything running as this user can write to.
     hw = pt["half_w0"] * 2.0 ** (-pt["oct_per_loop"] * phase)
     rot = pt["rot_per_loop"] * phase
 

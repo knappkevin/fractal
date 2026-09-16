@@ -1,0 +1,24 @@
+# Digests of the artifacts this plugin ships, and the toolchain that made
+# them. Rerun tools/build.sh and compare with 'sha256sum -c'.
+#
+#   gcc (GCC) 16.2.1 20260810
+#   glibc 2.44
+#   qsb 6.11.2
+#
+#   gcc -O2 -fopenmp -o tools/perturb tools/perturb.c -lquadmath -lm
+#   gcc -O2 -o tools/palette tools/palette.c -lm
+#   qsb --glsl 100es,120,150 --hlsl 50 --msl 12 -o <name>.frag.qsb <name>.frag
+0297362c2ce33aec22d55b3ba965d7e529f1a61ca3671c4ebeeba705dded28a8  tools/perturb
+1f5bb3f29fd7ae0c115ccdbcf83211ce2e556dfea8536899683a4e1a8f0650ed  mandelbrot/shaders/star.frag.qsb
+24c7226eee037df03a7d2b5668965726823cbbbafafc515dc42e96f67d7ff2ad  mandelbrot/shaders/lattice.frag.qsb
+2bf262fd6c391652cb86b7eef55ba3dcc663e366ba7980056600edb19cc6b9bc  mandelbrot/shaders/dragon.frag.qsb
+53f580213ac3044b16685dbd15cf5af6f6a8c4f4a61a042dc57cd4990d84d25d  mandelbrot/shaders/lizard.frag.qsb
+61f4687c29975308b7cdb590bf1bf956de86b745033b25165e0f638c82d91b35  mandelbrot/shaders/antler.frag.qsb
+688d1daaa06f039178b5c66d88f444a25dc3a37ea9a43df9848f7a002ed877ba  mandelbrot/shaders/dagger.frag.qsb
+7bf9288fb80d3da0b4b76c043b0322d1ff896d9dc66711f2f26f70829bc6b191  mandelbrot/shaders/lightning.frag.qsb
+7d351c68a219028c93b8724a4c78b548d2d9eaa7fc5a0ad88739ddd707c8668e  tools/palette
+84e5d5cc6e8fdfa25fc0d4016d3da3e8df8f023570c59c37680ceefdf42a1684  mandelbrot/shaders/thorns.frag.qsb
+abd1b01c7dbae30d173451ff0c9ca24c7dfac554cf215e989de77e0d424b254a  mandelbrot/shaders/thistle.frag.qsb
+cbacf4cd3387ff78d34b3cac5ea26589a32364be482e1e7c101638837357db30  mandelbrot/shaders/bramble.frag.qsb
+d92e118cf57654cd54821d67cf19c368a1bef2309191cb207cf7f0104669d539  mandelbrot/shaders/snowflake.frag.qsb
+ec2969318af11f41561ab96521dfbe4ab30f0a30904f6b599d50a9ba60c76507  mandelbrot/shaders/claw.frag.qsb

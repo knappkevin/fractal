@@ -1,8 +1,6 @@
-# Built from the .c sources beside them by tools/build.sh, and rebuilt on demand
-# by the tools that need them. Never committed: a reviewer cannot check a binary
-# against the source they read, so the source is the only thing that ships.
-tools/perturb
-tools/palette
+# Built by tools/build.sh. perturb and palette ship, because the plugin runs them
+# and must not compile its own: their digests, and the toolchain that reproduces
+# them, are in tools/SHA256SUMS. mis is a tool only, never run by the plugin.
 tools/mis
 
 __pycache__/
