@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
+import Quickshell.Wayland
 import QtQuick
 
 import "mandelbrot"
@@ -129,10 +130,17 @@ Item {
   // ----------------------------------------------------------------------
   property string sessionPoint: ""
 
-  readonly property string point: {
+  // Resolved in a function rather than inline so `rollPoint()` can ask for the
+  // point without reading the `point` property itself. Reading that bound
+  // property there while writing `sessionPoint` -- which the binding depends on
+  // -- is a cycle, and QML reported it as one.
+  function resolvedPoint() {
     var want = String(sessionPoint || settings.namedPoint || "")
-    return catalogue.has(want) ? want : catalogue.fallback
+    var list = catalogue.names
+    return list && list.indexOf(want) >= 0 ? want : catalogue.fallback
   }
+
+  readonly property string point: resolvedPoint()
 
   readonly property real loopMs:
     Math.max(4000, 1000 * catalogue.octavesFor(point) / settings.speed)
@@ -148,7 +156,7 @@ Item {
   }
 
   function rollPoint() {
-    sessionPoint = catalogue.another(point)
+    sessionPoint = catalogue.another(resolvedPoint())
     phase = 0
     wantThumbnail()
   }
@@ -191,7 +199,10 @@ Item {
   Timer {
     interval: Math.max(16, Math.round(1000 / settings.fps))
     repeat: true
-    running: root.active && !root.covered && !settings.paused
+    // Also stopped while the screensaver is up: it covers the desktop, so
+    // animating underneath it would be a second full-screen shader pass per
+    // monitor for nothing.
+    running: root.active && !root.covered && !settings.paused && !root.screensaverShowing
     onTriggered: root.phase = (root.phase + interval / root.loopMs) % 1
   }
 
@@ -210,6 +221,90 @@ Item {
         return false
     }
     return true
+  }
+
+  // ----------------------------------------------------------------------
+  // The idle screensaver
+  //
+  // Off unless the user asks for it, and it only runs once Omarchy's own
+  // screensaver has been switched off. `omarchy toggle screensaver` writes a
+  // flag; Omarchy's launcher reads it, and this reads the same flag, so turning
+  // this on without turning theirs off cannot end with two screensavers on one
+  // screen.
+  //
+  // The flag is only ever READ here. Writing it would make this plugin the owner
+  // of state it cannot clean up: remove the plugin and the machine is left with
+  // no screensaver at all and nothing left to explain why.
+  // ----------------------------------------------------------------------
+  property bool omarchyScreensaverOff: false
+  property bool leverKnown: false
+  property bool warnedAboutLever: false
+  property bool screensaverShowing: false
+
+  readonly property string leverPath:
+    home + "/.local/state/omarchy/toggles/screensaver-off"
+
+  readonly property bool screensaverArmed:
+    settings.screensaver && omarchyScreensaverOff
+
+  // A flag file that may well not exist, so it is asked rather than watched: a
+  // FileView cannot arm on a path that is not there. `test -e` rather than the
+  // toggle helper because this runs forever, and the flag's location is
+  // documented ("a flag file under ~/.local/state/omarchy/toggles/").
+  Process {
+    id: saverLever
+    command: ["/usr/bin/test", "-e", root.leverPath]
+    onExited: function(code) {
+      root.omarchyScreensaverOff = code === 0
+      root.leverKnown = true
+    }
+  }
+
+  Timer {
+    interval: 5000
+    repeat: true
+    running: true
+    triggeredOnStart: true
+    onTriggered: if (!saverLever.running) saverLever.running = true
+  }
+
+  // The same primitive the shell's own idle service uses, with the same timeout
+  // read from the same file.
+  IdleMonitor {
+    id: idleMonitor
+    enabled: root.screensaverArmed
+    timeout: settings.idleScreensaverSeconds
+    respectInhibitors: true
+
+    onIsIdleChanged: {
+      if (!root.screensaverArmed) {
+        root.screensaverShowing = false
+        // The one moment the user is otherwise left guessing: the setting is on,
+        // the desktop went idle, and nothing happened. Said once, not per cycle.
+        if (idleMonitor.isIdle && settings.screensaver && leverKnown
+            && !omarchyScreensaverOff && !root.warnedAboutLever) {
+          root.warnedAboutLever = true
+          console.warn("fractal: screensaver is on, but Omarchy's is on too;"
+                       + " run `omarchy toggle screensaver` or this will not appear")
+        }
+        return
+      }
+      root.screensaverShowing = idleMonitor.isIdle
+    }
+  }
+
+  // The screensaver's own phase, driven only while it is up. Same reason as
+  // above: the wallpaper's timer stops whenever the desktop is covered, and a
+  // screensaver is as covered as it gets.
+  property real saverPhase: 0
+
+  onScreensaverShowingChanged: if (screensaverShowing) saverPhase = 0
+
+  Timer {
+    interval: Math.max(16, Math.round(1000 / settings.fps))
+    repeat: true
+    running: root.screensaverShowing
+    onTriggered: root.saverPhase = (root.saverPhase + interval / root.loopMs) % 1
   }
 
   // A theme switch rm -rf's current/theme and renames a new directory over it,
@@ -290,6 +385,9 @@ Item {
         "point <name>           zoom into that one",
         "point next             move along to the next one",
         "point random           jump to one at random now",
+        "screensaver <on|off>   run this fractal as the idle screensaver instead of",
+        "                       Omarchy's. Needs theirs off first -- run",
+        "                       `omarchy toggle screensaver` -- or both would show",
         "refresh                re-read your theme and settings, remake the picker image",
         "help                   this text",
         "",
@@ -347,6 +445,10 @@ Item {
         return "unknown point '" + value + "'; try: fractal point list"
       return root.chooseAndReport(value)
     }
+
+    function screensaver(value: string): string {
+      return root.setScreensaver(value)
+    }
   }
 
   function chooseAndReport(name) {
@@ -376,6 +478,30 @@ Item {
       settings.set(patch)
     }
     return String(settingNumber(key))
+  }
+
+  // The screensaver is the one setting with a precondition, so it takes its own
+  // setter rather than going through setFlag. Turning this on while Omarchy's
+  // own screensaver is still enabled would put two of them on the same screen,
+  // and a refusal naming the command is more use than a silent double.
+  function setScreensaver(value) {
+    if (value === "get" || value === "")
+      return settings.screensaver ? "true" : "false"
+    if (value === "on" || value === "true") {
+      settings.set({ screensaver: true })
+      // Deliberately no advice here. The flag is read on a timer, so any message
+      // about it would be based on a reading up to a few seconds old -- and it
+      // is wrong in exactly the case it exists for, the user who runs
+      // `omarchy toggle screensaver` and this back to back. The gate in
+      // `screensaverArmed` is what prevents two screensavers, and it is exact.
+      return "true"
+    }
+    if (value === "off" || value === "false") {
+      settings.set({ screensaver: false })
+      screensaverShowing = false
+      return "false"
+    }
+    return "usage: screensaver get|on|off"
   }
 
   function setFlag(value, key) {
@@ -411,6 +537,40 @@ Item {
           MandelbrotZoom {
             aspect: screenScope.modelData.height / Math.max(1, screenScope.modelData.width)
             phase: root.phase
+            pointName: root.point
+            shaderDir: root.pluginDir + "/mandelbrot/shaders/"
+            renderScale: settings.scale
+            bandScale: settings.bands
+            colors: palette
+          }
+        }
+      }
+    }
+  }
+
+  // One parked screensaver window per screen. Parked rather than summoned: a
+  // layer window built after the shell's scene exists never maps, and this one
+  // has to appear on a timer, unattended. Hidden, it costs nothing.
+  Variants {
+    model: Quickshell.screens
+
+    Scope {
+      id: saverScope
+      required property var modelData
+
+      ScreensaverWindow {
+        screen: saverScope.modelData
+        anchors { top: true; bottom: true; left: true; right: true }
+        shown: root.screensaverShowing
+        onDismissed: root.screensaverShowing = false
+
+        // Handed over inside a Component, exactly as the wallpaper's scene is.
+        // Reading `point` from a property binding on the window instead made QML
+        // report a binding loop on `point`; in here it does not.
+        scene: Component {
+          MandelbrotZoom {
+            aspect: saverScope.modelData.height / Math.max(1, saverScope.modelData.width)
+            phase: root.saverPhase
             pointName: root.point
             shaderDir: root.pluginDir + "/mandelbrot/shaders/"
             renderScale: settings.scale

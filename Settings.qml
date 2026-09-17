@@ -38,7 +38,8 @@ QtObject {
     paused: false,           // hold the animation still
     pauseWhenCovered: false, // ...while windows cover the whole screen
     markers: true,
-    poll: false
+    poll: false,
+    screensaver: false       // show this fractal as the idle screensaver
   })
 
   function defaultsFor(key) {
@@ -124,6 +125,7 @@ QtObject {
   readonly property bool pauseWhenCovered: flag("pauseWhenCovered")
   readonly property bool markers: flag("markers")
   readonly property bool poll: flag("poll")
+  readonly property bool screensaver: flag("screensaver")
 
   // The point named by hand, if any. Whether it is usable, and what to show when
   // it is not, needs the catalogue and belongs to the service.
@@ -138,6 +140,23 @@ QtObject {
     return raw(key) === true
   }
 
+  // The idle service's screensaver delay sits at the top level of the same file,
+  // not on this plugin's entry, so it is read separately. A plain property
+  // rather than a binding: text() is a method call, and a binding on it would
+  // never re-evaluate when the file changes.
+  property int idleScreensaverSeconds: 150
+
+  function adoptIdle() {
+    var cfg = null
+    try {
+      cfg = JSON.parse(config.text() || "{}")
+    } catch (e) {
+      cfg = null
+    }
+    var want = cfg && cfg.idle ? Math.round(Number(cfg.idle.screensaver)) : NaN
+    idleScreensaverSeconds = want > 0 ? want : 150
+  }
+
   // blockLoading makes text() a synchronous read, so the settings can be seeded
   // before anything asks for them.
   property FileView config: FileView {
@@ -145,7 +164,13 @@ QtObject {
     blockLoading: true
     watchChanges: true
     printErrors: false
-    onLoaded: settings.adopt()
-    onFileChanged: reload()
+    onLoaded: {
+      settings.adopt()
+      settings.adoptIdle()
+    }
+    onFileChanged: {
+      reload()
+      settings.adoptIdle()
+    }
   }
 }

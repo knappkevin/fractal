@@ -1,4 +1,4 @@
-# Fractal Wallpaper Plugin for Omarchy
+# Fractal Wallpaper + Screensaver Plugin for Omarchy
 
 An infinite zoom into a fractal, drawn in the colors of your active theme. Features 12 different Misiurewicz points in the Mandelbrot set. Pick it from the background switcher like any other wallpaper. Not very lightweight.
 
@@ -20,6 +20,13 @@ omarchy plugin add https://github.com/knappkevin/fractal.git --enable
 ```
 
 `Super + Ctrl + Space` to pick it from the wallpaper picker.
+
+## Enable Screensaver
+
+```sh
+omarchy toggle screensaver               # to off
+omarchy-shell fractal screensaver on
+```
 
 ## Runtime IPC
 
