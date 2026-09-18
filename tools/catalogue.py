@@ -18,8 +18,10 @@ renderer (a pixel that escapes stops, so anything past the median is free), but
 it does have to be big enough or the deep filaments go black.
 
 usage: catalogue.py [--only name] [--keep] [candidates.txt]
+       catalogue.py --julia      measure the Julia rendering of every point
 """
 import atexit
+import glob
 import json
 import math
 import os
@@ -74,11 +76,13 @@ def read_field(path):
     return struct.unpack("<%df" % (len(raw) // 4), raw)
 
 
-def field_for(orbit, q, p, half_w, rot, budget, tag):
+def field_for(orbit, q, p, half_w, rot, budget, tag, mode="mandel"):
     out = os.path.join(WORK, "catalogue_%s.bin" % tag)
-    r = subprocess.run([PERTURB, orbit, str(q), str(p), repr(half_w), repr(rot),
-                        str(budget), str(GRID_W), str(GRID_H), out],
-                       stderr=subprocess.PIPE)
+    cmd = [PERTURB, orbit, str(q), str(p), repr(half_w), repr(rot),
+           str(budget), str(GRID_W), str(GRID_H), out]
+    if mode == "julia":
+        cmd.append("julia")
+    r = subprocess.run(cmd, stderr=subprocess.PIPE)
     if r.returncode != 0:
         return None, 0
     worst = 0.0
@@ -104,10 +108,17 @@ def spread(a, b):
     return d[n // 2], d[(3 * n) // 4] - d[n // 4]
 
 
-def score(pt, tag):
-    """Return ((drift, spread), worst, half_w), or a reason string if unusable."""
+def score(pt, tag, mode="mandel"):
+    """Return ((drift, spread), worst, half_w), or a reason string if unusable.
+
+    The drift one loop must produce is the period for the Mandelbrot rendering
+    and twice it for the Julia one -- measured on all twelve points, not
+    assumed -- and the reported drift is what the shader subtracts, so the
+    palette lines up across the wrap for whichever it is.
+    """
     c_re, c_im = pt["c_re"], pt["c_im"]
     q, p = pt["q"], pt["p"]
+    want_drift = (2 if mode == "julia" else 1) * p
     orbit = os.path.join(WORK, "catalogue_%s.orb" % tag)
     with open(orbit, "w") as fh:
         for k, (re, im) in enumerate(pt["orbit"]):
@@ -119,8 +130,8 @@ def score(pt, tag):
     for depth in DEPTHS:
         hw0 = FULL_HW * 2.0 ** -depth
         hw1 = hw0 * 2.0 ** -oct_loop
-        a, wa = field_for(orbit, q, p, hw0, 0.0, MEASURE_BUDGET, tag + "a")
-        b, wb = field_for(orbit, q, p, hw1, rot_loop, MEASURE_BUDGET, tag + "b")
+        a, wa = field_for(orbit, q, p, hw0, 0.0, MEASURE_BUDGET, tag + "a", mode)
+        b, wb = field_for(orbit, q, p, hw1, rot_loop, MEASURE_BUDGET, tag + "b", mode)
         if a is None or b is None:
             return "the reference renderer failed"
         got = spread(a, b)
@@ -129,14 +140,16 @@ def score(pt, tag):
         median, wide = got
         if wide > SEAM_MAX_IQR:
             continue
-        if abs(median + p) > 0.5:
-            return ("settled in shape but the escape count drifts by %.2f, not the"
-                    " period (-%d)" % (median, p))
+        if abs(median + want_drift) > 0.5:
+            return ("settled in shape but the escape count drifts by %.2f, not"
+                    " %s (-%d)"
+                    % (median, "the period" if mode == "mandel"
+                       else "twice the period", want_drift))
         worst = max(wa, wb)
         for ph in PHASES[1:-1]:
             hw = hw0 * 2.0 ** (-oct_loop * ph)
             f, w = field_for(orbit, q, p, hw, rot_loop * ph, MEASURE_BUDGET,
-                             tag + "p%d" % int(ph * 100))
+                             tag + "p%d" % int(ph * 100), mode)
             if f is not None:
                 worst = max(worst, w)
         # Anchor the palette to the frame rather than to zero. A deep zoom never
@@ -148,8 +161,53 @@ def score(pt, tag):
     return ("the renormalisation has not settled by 2^-%d" % DEPTHS[-1])
 
 
+def calibrate_julia():
+    """Measure the Julia rendering of every point already in the catalogue.
+
+    The main pass measures the Mandelbrot rendering. These are separate because
+    the two have different escape ranges -- the Julia counts run about twice as
+    high -- so a palette anchored on one puts the other in the wrong part of the
+    ramp. The far field then comes out mid-ramp, which reads as a flood of the
+    wrong colour rather than as anything being wrong.
+
+    Nothing outside the `julia` block is touched, so every point keeps exactly
+    the Mandelbrot constants it already had.
+    """
+    outdir = os.path.join(ROOT, "mandelbrot", "points")
+    for path in sorted(glob.glob(os.path.join(outdir, "*.json"))):
+        if path.endswith("index.json"):
+            continue
+        name = os.path.basename(path)[:-5]
+        pt = json.load(open(path))
+        got = score(pt, name + "-julia", "julia")
+        if isinstance(got, str):
+            print("%-12s julia rejected: %s" % (name, got))
+            continue
+        (drift, spread_steps), worst, _hw0, floor = got
+        cycles = max(1, int((worst * 1.15 + 8 - pt["q"]) // pt["p"]) + 1)
+        pt["julia"] = {
+            # Escape steps the loop *gains*, which is what the shader subtracts as
+            # uPhase advances -- the positive form of the measured median, which
+            # spread() reports as a loss because it subtracts the later frame.
+            "drift": -drift,
+            "seam_spread": spread_steps,
+            "worst_escape": worst,
+            "maxiter": pt["q"] + cycles * pt["p"],
+            "pal_scale": round(BANDS / max(1.0, worst), 6),
+            "pal_offset": round(floor, 3),
+        }
+        json.dump(pt, open(path, "w"), indent=2)
+        print("%-12s julia: gains %.2f a loop, escape to %.0f (palette anchored at"
+              " %.0f), %d steps" % (name, -drift, worst, floor,
+                                    pt["julia"]["maxiter"]))
+
+
 def main():
     args = [a for a in sys.argv[1:]]
+    if "--julia" in args:
+        require_perturb()
+        calibrate_julia()
+        return
     only = None
     if "--only" in args:
         i = args.index("--only")

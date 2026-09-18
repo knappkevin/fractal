@@ -7,10 +7,15 @@
 //
 // Build: gcc -O2 -fopenmp -o perturb perturb.c -lquadmath -lm
 //
-//   perturb <orbitfile> <q> <p> <halfwidth> <rotturns> <maxiter> <W> <H> <out.bin>
+//   perturb <orbitfile> <q> <p> <halfwidth> <rotturns> <maxiter> <W> <H> <out.bin> [julia]
 //
 // orbitfile holds "k re im" per line at arbitrary precision, q+p of them.
 // out.bin is W*H little endian float32 escape counts; negative means no escape.
+//
+// With `julia` the parameter is fixed and each pixel is its own starting z, so
+// the perturbation seeds with the pixel's offset and nothing is added to it at
+// any step. The reference orbit is the same critical orbit either way -- that is
+// what makes one point worth rendering two ways.
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -27,7 +32,7 @@ static void split(__float128 x, double *hi, double *lo) {
 
 int main(int argc, char **argv) {
   if (argc < 10) {
-    fprintf(stderr, "usage: perturb orbitfile q p halfwidth rotturns maxiter W H out.bin\n");
+    fprintf(stderr, "usage: perturb orbitfile q p halfwidth rotturns maxiter W H out.bin [julia]\n");
     return 2;
   }
   int q = atoi(argv[2]), p = atoi(argv[3]);
@@ -36,6 +41,7 @@ int main(int argc, char **argv) {
   int maxiter = atoi(argv[6]);
   int W = atoi(argv[7]), H = atoi(argv[8]);
   const char *out = argv[9];
+  int julia = argc > 10 && argv[10][0] == 'j';
   int np = q + p;
 
   FILE *g = fopen(argv[1], "r");
@@ -74,15 +80,15 @@ int main(int argc, char **argv) {
       double v = ((j + 0.5) / H - 0.5) * 2 * hw * aspect;
       double dx = u * cr - v * sr, dy = u * sr + v * cr;
 
-      double ex = 0, ey = 0, val = -1;
+      double ex = julia ? dx : 0, ey = julia ? dy : 0, val = -1;
       for (int k = 0; k < maxiter; k++) {
         int idx = k < q ? k : q + (k - q) % p;
         double hiz = zr[idx], loz = zr2[idx];
         double hix = zi[idx], lox = zi2[idx];
         double nx = 2 * (hiz * ex - hix * ey + loz * ex - lox * ey);
         double ny = 2 * (hiz * ey + hix * ex + loz * ey + lox * ex);
-        double rx = nx + (ex * ex - ey * ey) + dx;
-        double ry = ny + (2 * ex * ey) + dy;
+        double rx = nx + (ex * ex - ey * ey) + (julia ? 0 : dx);
+        double ry = ny + (2 * ex * ey) + (julia ? 0 : dy);
         ex = rx; ey = ry;
         double zx = hiz + ex, zy = hix + ey;
         double m = zx * zx + zy * zy;

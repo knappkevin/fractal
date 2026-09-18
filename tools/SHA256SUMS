@@ -8,17 +8,29 @@
 #   gcc -O2 -fopenmp -o tools/perturb tools/perturb.c -lquadmath -lm
 #   gcc -O2 -o tools/palette tools/palette.c -lm
 #   qsb --glsl 100es,120,150 --hlsl 50 --msl 12 -o <name>.frag.qsb <name>.frag
-0297362c2ce33aec22d55b3ba965d7e529f1a61ca3671c4ebeeba705dded28a8  tools/perturb
+0299e741194f5bc0db79326e51ef4801d3e115217be2723bb3926ce4e8e6d746  mandelbrot/shaders/thistle-julia.frag.qsb
 1f5bb3f29fd7ae0c115ccdbcf83211ce2e556dfea8536899683a4e1a8f0650ed  mandelbrot/shaders/star.frag.qsb
 24c7226eee037df03a7d2b5668965726823cbbbafafc515dc42e96f67d7ff2ad  mandelbrot/shaders/lattice.frag.qsb
 2bf262fd6c391652cb86b7eef55ba3dcc663e366ba7980056600edb19cc6b9bc  mandelbrot/shaders/dragon.frag.qsb
+43fe98a3025a532c95bd00f7c43355f473b733f56eb23aab7a7e6d35803debe4  mandelbrot/shaders/thorns-julia.frag.qsb
+49a2a22403e4bd38bcd05a002b1c6d3d4328ef9afa3a5e00669f4b3348c988c5  mandelbrot/shaders/antler-julia.frag.qsb
 53f580213ac3044b16685dbd15cf5af6f6a8c4f4a61a042dc57cd4990d84d25d  mandelbrot/shaders/lizard.frag.qsb
 61f4687c29975308b7cdb590bf1bf956de86b745033b25165e0f638c82d91b35  mandelbrot/shaders/antler.frag.qsb
 688d1daaa06f039178b5c66d88f444a25dc3a37ea9a43df9848f7a002ed877ba  mandelbrot/shaders/dagger.frag.qsb
+7a067ceaf131c2c7701c33704dbb910df047d345462fdc582889ee61eea01364  mandelbrot/shaders/claw-julia.frag.qsb
 7bf9288fb80d3da0b4b76c043b0322d1ff896d9dc66711f2f26f70829bc6b191  mandelbrot/shaders/lightning.frag.qsb
 7d351c68a219028c93b8724a4c78b548d2d9eaa7fc5a0ad88739ddd707c8668e  tools/palette
+8175e5d955571441d48f6c24e6958f0d870f861a1274b68fee852c6b075b802e  mandelbrot/shaders/dagger-julia.frag.qsb
 84e5d5cc6e8fdfa25fc0d4016d3da3e8df8f023570c59c37680ceefdf42a1684  mandelbrot/shaders/thorns.frag.qsb
+8ae01e79bafab19c7f7ed1f082172cca9d7840217a2d44d2266cd264e5939a16  mandelbrot/shaders/lizard-julia.frag.qsb
+a9a99f045758905ba9933b345b8110dd129aff4259c8a2dc0b97df19502bfcf3  mandelbrot/shaders/lightning-julia.frag.qsb
+a9ea3342fcd39fa50982a3474b09c350b8d9de67714af8e5e47760eb1b438244  mandelbrot/shaders/star-julia.frag.qsb
+abaec60a547ee3b93d97f4a003e3e6776f256a9bcb1168bdc9ac841292cdf422  tools/perturb
 abd1b01c7dbae30d173451ff0c9ca24c7dfac554cf215e989de77e0d424b254a  mandelbrot/shaders/thistle.frag.qsb
+b01173d05cab9dfe76a86a3e4b6686cc990b1ef16987781dc3fc85b2fe99813e  mandelbrot/shaders/snowflake-julia.frag.qsb
+b48e5a349a8dd7c94a203f5301c82ad2e6d27f5dea76622e4f606be11566d584  mandelbrot/shaders/lattice-julia.frag.qsb
 cbacf4cd3387ff78d34b3cac5ea26589a32364be482e1e7c101638837357db30  mandelbrot/shaders/bramble.frag.qsb
+ce75bda832dc5d7e100b5ac66078d8849c2a4f04a0460e1445e1c57b2a550017  mandelbrot/shaders/bramble-julia.frag.qsb
 d92e118cf57654cd54821d67cf19c368a1bef2309191cb207cf7f0104669d539  mandelbrot/shaders/snowflake.frag.qsb
 ec2969318af11f41561ab96521dfbe4ab30f0a30904f6b599d50a9ba60c76507  mandelbrot/shaders/claw.frag.qsb
+f997fd750606a20aa7ff1f67ecfe571436a9ff247a7e739f2bb8664121a3330c  mandelbrot/shaders/dragon-julia.frag.qsb

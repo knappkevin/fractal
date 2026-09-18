@@ -7,7 +7,9 @@ It runs tools/perturb, the same CPU reference the catalogue gates points with,
 so the two cannot drift apart, and tools/palette turns that renderer's escape
 counts into this image's scanlines. Both ship built, by tools/build.sh.
 
-usage: marker.py <points/name.json> <phase> <out.png> [colour ...]
+usage: marker.py <points/><variant>.json <phase> <out.png> [colour ...]
+       <variant> is a point name, optionally with a -julia suffix for the Julia
+       set of that same parameter. The point file it names is shared.
 env:   MBSIZE_W / MBSIZE_H   render size, default 1920x1080
 """
 import json
@@ -27,6 +29,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PERTURB = os.path.join(HERE, "perturb")
 PALETTE = os.path.join(HERE, "palette")
+
+# A point's name carries its rendering mode: `<name>` is the Mandelbrot set at
+# that Misiurewicz point, `<name>-julia` is the Julia set of the same parameter.
+# tools/build.sh names the generated shaders the same way, so one name selects
+# both the shader the renderer draws and the mode this script renders in.
+JULIA_SUFFIX = "-julia"
+
+# The point block holding that variant's own measured constants.
+JULIA_KEY = "julia"
 
 # The ramp is resolved to this many steps before the helper sees it.
 LUT_N = 1 << 10
@@ -142,7 +153,17 @@ def main():
     global PAL
     point_path, phase, out = sys.argv[1], float(sys.argv[2]), sys.argv[3]
     PAL = [rgb(c) for c in (sys.argv[4:8] or live_ramp())]
-    pt = json.load(open(point_path))
+
+    # The variant name says which rendering this is; the point file is shared,
+    # because the two differ only in where the perturbation comes from.
+    stem = os.path.basename(point_path)
+    if stem.endswith(".json"):
+        stem = stem[:-5]
+    julia = stem.endswith(JULIA_SUFFIX)
+    data_path = (os.path.join(os.path.dirname(point_path),
+                              stem[:-len(JULIA_SUFFIX)] + ".json") if julia
+                 else point_path)
+    pt = json.load(open(data_path))
 
     # The helpers are shipped built, by tools/build.sh, and recorded in
     # tools/SHA256SUMS. Nothing is compiled here: a binary built at render time
@@ -151,10 +172,14 @@ def main():
     hw = pt["half_w0"] * 2.0 ** (-pt["oct_per_loop"] * phase)
     rot = pt["rot_per_loop"] * phase
 
-    # Same expression as the shader: the palette is anchored to the frame's own
-    # floor, not to zero, and the drift is the period.
-    scale = pt["pal_scale"]
-    base = pt["pal_offset"] + pt["p"] * phase
+    # Same expression as the shader, with the variant's own measured constants.
+    # The Julia rendering's counts run about twice as high, so it carries its own
+    # anchor, drift and budget; without that block the Mandelbrot values are used
+    # and the picture is geometrically right but coloured wrong.
+    variant = pt.get(JULIA_KEY) if julia and isinstance(pt.get(JULIA_KEY), dict) else None
+    scale = variant["pal_scale"] if variant else pt["pal_scale"]
+    drift = variant["drift"] if variant else pt["p"]
+    base = (variant["pal_offset"] if variant else pt["pal_offset"]) + drift * phase
 
     # One private directory for the whole run, created exclusively and 0700. A
     # shared directory would let another user pre-create any of these names as a
@@ -197,9 +222,12 @@ def main():
                 fh.write("%d %.34e %.34e\n" % (k, re, im))
         with open(lutfile, "wb") as fh:
             fh.write(lut_bytes())
-        subprocess.run([PERTURB, orb, str(pt["q"]), str(pt["p"]), repr(hw), repr(rot),
-                        str(pt["maxiter"]), str(W), str(H), field], check=True,
-                       stderr=subprocess.DEVNULL)
+        cmd = [PERTURB, orb, str(pt["q"]), str(pt["p"]), repr(hw), repr(rot),
+               str(variant["maxiter"] if variant else pt["maxiter"]),
+               str(W), str(H), field]
+        if julia:
+            cmd.append("julia")
+        subprocess.run(cmd, check=True, stderr=subprocess.DEVNULL)
         # Resolving the ramp, flipping the frame and averaging it down are a pass
         # over two million values, which is where the time went. The helper does
         # the whole pass in C and hands back finished PNG scanlines.

@@ -48,5 +48,13 @@
   "seam_drift": -3.999998092651367,
   "worst_escape": 64.6,
   "pal_scale": 0.077399,
-  "pal_offset": 23.249
+  "pal_offset": 23.249,
+  "julia": {
+    "drift": 8.0,
+    "seam_spread": 0.0,
+    "worst_escape": 94.7,
+    "maxiter": 120,
+    "pal_scale": 0.052798,
+    "pal_offset": 49.629
+  }
 }

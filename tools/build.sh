@@ -25,9 +25,15 @@ for p in mandelbrot/points/*.json; do
   [ -e "$p" ] || continue
   case "$p" in *index.json) continue ;; esac
   name=$(basename "$p" .json)
-  python3 tools/gen.py "$p" "mandelbrot/shaders/$name.frag"
-  "$QSB" --glsl 100es,120,150 --hlsl 50 --msl 12 \
-        -o "mandelbrot/shaders/$name.frag.qsb" "mandelbrot/shaders/$name.frag"
+  # Two shaders per point: the Mandelbrot set at it, and the Julia set of its
+  # parameter. Same camera, same orbit, same loop -- only where the perturbation
+  # comes from differs, so the two names differ by a suffix and nothing else.
+  for mode in mandel julia; do
+    if [ "$mode" = julia ]; then suffix="-julia"; else suffix=""; fi
+    python3 tools/gen.py "$p" "mandelbrot/shaders/$name$suffix.frag" "$mode"
+    "$QSB" --glsl 100es,120,150 --hlsl 50 --msl 12 \
+          -o "mandelbrot/shaders/$name$suffix.frag.qsb" "mandelbrot/shaders/$name$suffix.frag"
+  done
 done
 
 python3 - <<'PY'
