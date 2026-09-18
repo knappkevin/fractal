@@ -24,10 +24,13 @@ QtObject {
   // Defaults. Everything the plugin starts from lives here; a value set by an
   // ipc command is stored in shell.json and overrides it.
   //
-  // `markers` and `poll` have no command of their own. markers=false stops the
-  // plugin writing the background-picker image at all; poll=true forces the
-  // wallpaper to be re-read every couple of seconds, for a host whose
-  // background service cannot be reached.
+  // `markers` and `poll` have neither a command nor a control of their own:
+  // both are for hosts that are not quite this one, and are edited into
+  // shell.json by hand if needed. markers=false stops the plugin writing the
+  // background-picker image at all. poll=true rereads the wallpaper link every
+  // couple of seconds -- already what happens when the background service cannot
+  // be found, so this only forces it for a service that is there but never
+  // reports a change.
   // ----------------------------------------------------------------------
   readonly property var defaults: ({
     fps: 20,                 // frames drawn per second
@@ -39,11 +42,26 @@ QtObject {
     pauseWhenCovered: false, // ...while windows cover the whole screen
     markers: true,
     poll: false,
-    screensaver: false       // show this fractal as the idle screensaver
+    screensaver: false,      // show this fractal as the idle screensaver
+    mode: "both"           // "mandel", "julia", or "both"
   })
 
   function defaultsFor(key) {
     return defaults[key]
+  }
+
+  // What each numeric setting accepts. The menu's sliders and the IPC setters
+  // both read this, so a control cannot offer a value its setter would refuse,
+  // and the limits are written down once instead of in both places.
+  readonly property var ranges: ({
+    fps:   { minimum: 1,     maximum: 60,   step: 1,     integer: true },
+    speed: { minimum: 0.001, maximum: 4,    step: 0.005, integer: false },
+    scale: { minimum: 0.25,  maximum: 1,    step: 0.05,  integer: false },
+    bands: { minimum: 0.05,  maximum: 20,   step: 0.05,  integer: false }
+  })
+
+  function rangeFor(key) {
+    return ranges[key]
   }
 
   // The value in force, as stored or defaulted.
@@ -53,6 +71,14 @@ QtObject {
 
   property var state: ({})
   property string written: ""
+
+  // The entry our own last write replaced. A read can still hand that back: the
+  // file's text is cached and only re-read asynchronously, so an adopt asked for
+  // straight after a write -- which is exactly what reload() does -- sees the
+  // entry that was just overwritten. Adopting it undoes the write, which is why
+  // restoring defaults needed pressing twice: the first press was reverted by
+  // its own reload, and the second found the file already updated.
+  property string superseded: ""
 
   function body(src) {
     var out = {}
@@ -78,19 +104,33 @@ QtObject {
   // Our own write coming back looks like an outside edit; ignore that one.
   function adopt() {
     var s = JSON.stringify(stored())
-    if (s === written || s === JSON.stringify(state))
+    if (s === written || s === superseded || s === JSON.stringify(state))
       return
     state = JSON.parse(s)
   }
 
   function set(patch) {
+    var before = JSON.stringify(body(state))
     var next = body(state)
     for (var k in patch)
       next[k] = patch[k]
     state = next
     written = JSON.stringify(next)
+    superseded = before
     if (shell && typeof shell.updateEntryInline === "function")
       shell.updateEntryInline(pluginId, next)
+  }
+
+  // Back to the shipped defaults: the entry keeps its id and nothing else, so
+  // every value falls through to `defaults` again. Writing the current defaults
+  // out instead would pin them, and a default changed later would never apply.
+  function reset() {
+    var before = JSON.stringify(body(state))
+    state = ({})
+    written = "{}"
+    superseded = before
+    if (shell && typeof shell.updateEntryInline === "function")
+      shell.updateEntryInline(pluginId, ({}))
   }
 
   // ----------------------------------------------------------------------
@@ -126,6 +166,13 @@ QtObject {
   readonly property bool markers: flag("markers")
   readonly property bool poll: flag("poll")
   readonly property bool screensaver: flag("screensaver")
+
+  // Which renderings the catalogue offers. Anything unrecognised falls back to
+  // the Mandelbrot set rather than leaving the wallpaper with no picture.
+  readonly property string mode: {
+    var m = String(raw("mode"))
+    return (m === "julia" || m === "both") ? m : "mandel"
+  }
 
   // The point named by hand, if any. Whether it is usable, and what to show when
   // it is not, needs the catalogue and belongs to the service.

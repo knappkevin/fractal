@@ -14,6 +14,10 @@ import Quickshell.Io
 QtObject {
   id: thumb
 
+  // Emitted once the picker image is in place, by either route. A theme switch
+  // waits on this to put the effect back as the background.
+  signal finished()
+
   property string home: ""
   property string pluginDir: ""
   property string stateDir: ""     // holds theme/backgrounds
@@ -67,6 +71,7 @@ QtObject {
     environment: ({ HOME: thumb.home })
     onExited: function(code) {
       if (code === 0) {
+        thumb.finished()
         thumb.pump()
         return
       }
@@ -87,6 +92,8 @@ QtObject {
       if (code !== 0)
         console.warn("fractal: " + thumb.seedScript + " exited " + code
                      + "; the effect will not appear in the background picker")
+      else
+        thumb.finished()
       // Only reached when the render could not run.
       thumb.pump()
     }

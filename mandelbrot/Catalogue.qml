@@ -10,39 +10,82 @@ import Quickshell.Io
 // Every point in it has been checked by tools/catalogue.py to settle at the
 // depth the loop starts from. That is what lets the loop wrap without a seam,
 // and it is not something a name can tell you.
+//
+// Each point renders two ways -- the Mandelbrot set at it, and the Julia set of
+// its parameter -- and the *name* says which: `<point>` or `<point>-julia`. So
+// a pick survives a mode change, `point list` can offer 12 names or 24, and one
+// name is enough to choose both the shader and the data.
 QtObject {
   id: catalogue
 
   property string path: ""
 
+  // Which renderings to offer: "mandel", "julia", or "both".
+  property string mode: "mandel"
+
+  // Base names from the point file.
   property var names: ["snowflake"]
   property var octaves: ({})
   property string fallback: "snowflake"
 
+  readonly property string juliaSuffix: "-julia"
+
+  // Every name this mode offers. A plain property rather than a binding to an
+  // array: a bound array read from another component's binding is what made QML
+  // report a binding loop on `point` earlier, and there is no need to risk it.
+  property var variants: ["snowflake"]
+
+  function rebuild() {
+    var suffixes = mode === "julia" ? [juliaSuffix]
+                 : (mode === "both" ? ["", juliaSuffix] : [""])
+    var out = []
+    for (var s = 0; s < suffixes.length; s++)
+      for (var i = 0; i < names.length; i++)
+        out.push(names[i] + suffixes[s])
+    variants = out.length ? out : ["snowflake"]
+  }
+
+  onModeChanged: rebuild()
+  onNamesChanged: rebuild()
+
+  // The name to fall back to when a pick is not offered in this mode.
+  readonly property string defaultVariant:
+    mode === "julia" ? fallback + juliaSuffix : fallback
+
+  function isJulia(name) {
+    var s = String(name)
+    return s.length > juliaSuffix.length && s.slice(-juliaSuffix.length) === juliaSuffix
+  }
+
+  function base(name) {
+    var s = String(name)
+    return isJulia(s) ? s.slice(0, -juliaSuffix.length) : s
+  }
+
   function has(name) {
-    return names.indexOf(String(name)) >= 0
+    return variants.indexOf(String(name)) >= 0
   }
 
   // How far one loop zooms for this point. Used only for pacing; the renderer
-  // has the real figure baked in.
+  // has the real figure baked in. Both renderings of a point zoom alike.
   function octavesFor(name) {
-    var v = Number(octaves[name])
+    var v = Number(octaves[base(name)])
     return isFinite(v) && v > 0 ? v : 4.38
   }
 
   function next(name) {
-    if (!names.length)
+    if (!variants.length)
       return ""
-    var i = names.indexOf(name)
-    return names[(i + 1) % names.length]
+    var i = variants.indexOf(String(name))
+    return variants[(i + 1) % variants.length]
   }
 
   // Any name but the one showing, so `point random` always changes the picture.
   function another(name) {
-    if (names.length < 2)
-      return names.length ? names[0] : ""
-    var pick = names[Math.floor(Math.random() * names.length)]
-    return pick === name ? next(name) : pick
+    if (variants.length < 2)
+      return variants.length ? variants[0] : ""
+    var pick = variants[Math.floor(Math.random() * variants.length)]
+    return pick === String(name) ? next(name) : pick
   }
 
   property FileView file: FileView {
@@ -64,5 +107,6 @@ QtObject {
     names = list
     octaves = o.octaves || ({})
     fallback = list.indexOf(o.default) >= 0 ? o.default : list[0]
+    rebuild()
   }
 }

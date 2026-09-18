@@ -7,6 +7,8 @@ import Quickshell.Wayland
 import QtQuick
 
 import "mandelbrot"
+import "menu"
+import qs.Ui
 
 // Draws an endless fractal zoom above the wallpaper and below every window.
 //
@@ -15,9 +17,10 @@ import "mandelbrot"
 // click-through surface on the Bottom layer directly above it.
 //
 // Layout: the settings store is Settings.qml, the picker image Thumbnail.qml,
-// the theme palette ThemeColors.qml, the layer surface SceneWindow.qml, and the
-// fractal itself under mandelbrot/. This file wires them together and holds the
-// command surface, which cannot live elsewhere -- see the note above IpcHandler.
+// the theme palette ThemeColors.qml, the layer surface SceneWindow.qml, the
+// settings panel menu/Menu.qml, and the fractal itself under mandelbrot/. This
+// file wires them together and holds the command surface, which cannot live
+// elsewhere -- see the note above IpcHandler.
 Item {
   id: root
 
@@ -27,6 +30,11 @@ Item {
 
   readonly property string pluginId:
     manifest && manifest.id ? String(manifest.id) : "knappkevin.fractal"
+
+  // Injected by the host, with the environment as the fallback for a host that
+  // does not inject it. The image picker is a program in this tree, so anything
+  // that opens a GUI from here needs to be told where the tree is.
+  property string omarchyPath: Quickshell.env("OMARCHY_PATH") || ""
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateDir: home + "/.local/state/omarchy/current"
@@ -72,11 +80,54 @@ Item {
   property string polledWallpaper: ""
   readonly property string wallpaper: bound ? backgroundService.currentBackground : polledWallpaper
 
-  readonly property bool active:
-    String(wallpaper).split("/").pop().toLowerCase().match(markerPattern) !== null
+  function isMarker(path) {
+    return String(path).split("/").pop().toLowerCase().match(markerPattern) !== null
+  }
 
-  // The picker image follows the palette, not the wallpaper: see onReloaded.
-  onWallpaperChanged: palette.reload()
+  readonly property bool active: isMarker(wallpaper)
+
+  // ----------------------------------------------------------------------
+  // Surviving a theme switch.
+  //
+  // Omarchy replaces the theme directory, rewrites theme.name, and only then
+  // picks the new theme's background. Our marker lived in the directory it just
+  // replaced, so that pick cannot see it and falls back to the theme's first
+  // image: choosing the effect and then changing theme loses it, which is not
+  // what choosing it meant.
+  //
+  // The two halves of that arrive in either order -- the watch on theme.name can
+  // be delivered after the shell has already been told about the new background
+  // -- so each side asks the question using the other side's recency, and the
+  // answer is the wallpaper we were on until a moment ago.
+  // ----------------------------------------------------------------------
+  property string previousWallpaper: ""
+  property double backgroundChangedAt: 0
+  property double themeChangedAt: 0
+  property bool restoreBackground: false
+
+  // Wide enough for the gap between the two events, which is a fraction of a
+  // second, and narrow enough that a background picked by hand is not mistaken
+  // for one Omarchy chose.
+  readonly property int themeSwitchWindow: 1500
+
+  onWallpaperChanged: {
+    // Asked before previousWallpaper moves on: a switch to the theme's own first
+    // image, moments after theme.name was rewritten, is the theme change taking
+    // the background away rather than someone choosing something else.
+    //
+    // `active` still reads the *old* wallpaper here -- a binding that depends on
+    // a changing property is not re-evaluated until after this handler -- so the
+    // new value is taken from the property directly.
+    if (!restoreBackground && !isMarker(wallpaper) && isMarker(previousWallpaper)
+        && Date.now() - themeChangedAt < themeSwitchWindow)
+      restoreBackground = true
+
+    previousWallpaper = wallpaper
+    backgroundChangedAt = Date.now()
+
+    // The picker image follows the palette, not the wallpaper: see onReloaded.
+    palette.reload()
+  }
 
   // ----------------------------------------------------------------------
   // Children
@@ -91,8 +142,14 @@ Item {
   Catalogue {
     id: catalogue
     path: root.pluginDir + "/mandelbrot/points/index.json"
+    mode: root.mode
     onNamesChanged: root.onCatalogueReady()
   }
+
+  // Which renderings the catalogue offers: the Mandelbrot set at each point, the
+  // Julia set of each parameter, or both. Owned by the settings so it persists
+  // with the point beside it.
+  readonly property string mode: settings.mode
 
   ThemeColors {
     id: palette
@@ -112,14 +169,36 @@ Item {
     stateDir: root.stateDir
     fileName: root.markerFile
     seedScript: root.pluginDir + "/install-marker.sh"
+    onFinished: root.restoreWallpaper()
+    }
+
+  Menu {
+    service: root
+  }
+
+  // Omarchy's background picker, the same way its own bar button opens it.
+  //
+  // The one process here that inherits the environment rather than being handed
+  // a minimal one: this opens a GUI, through the shell's own image picker, and
+  // that needs the session it is running in. Every other process this plugin
+  // runs is a file or an IPC call, and is given only what it needs; see the note
+  // in the README on why.
+  Process {
+    id: switcher
+    // Environment is added to the inherited one, not a replacement: this is the
+    // one process here whose child is a GUI.
+    environment: ({ OMARCHY_PATH: root.omarchyPath })
+    command: ["/usr/bin/bash", "-c",
+              "background=$(omarchy-theme-bg-switcher); [[ -n $background ]]"
+              + " && omarchy-theme-bg-set \"$background\""]
   }
 
   Component.onCompleted: {
-    // After the children exist, so the settings can read shell.json. The first
-    // render waits for onReloaded above, which covers the initial palette read.
-    settings.adopt()
-    onCatalogueReady()
-  }
+      // After the children exist, so the settings can read shell.json. The first
+      // render waits for onReloaded above, which covers the initial palette read.
+      settings.adopt()
+      onCatalogueReady()
+    }
 
   // ----------------------------------------------------------------------
   // Which point is showing
@@ -136,8 +215,10 @@ Item {
   // -- is a cycle, and QML reported it as one.
   function resolvedPoint() {
     var want = String(sessionPoint || settings.namedPoint || "")
-    var list = catalogue.names
-    return list && list.indexOf(want) >= 0 ? want : catalogue.fallback
+    // Asked of the catalogue, so a name the current mode does not offer -- a
+    // Julia pick while in Mandelbrot mode, say -- resolves to that mode's
+    // default rather than showing nothing.
+    return catalogue.has(want) ? want : catalogue.defaultVariant
   }
 
   readonly property string point: resolvedPoint()
@@ -181,11 +262,48 @@ Item {
   }
 
   function wantThumbnail() {
-    if (!settings.markers || !point)
+    // A restore needs the image whether or not the picker offers one: it is the
+    // background, not just a thumbnail.
+    if (!point || (!settings.markers && !restoreBackground))
       return
     thumbnail.request(["/usr/bin/python3", pluginDir + "/tools/marker.py",
                        pluginDir + "/mandelbrot/points/" + point + ".json", "0",
                        thumbnail.outputPath].concat(palette.ramp))
+  }
+
+  // Put the effect back as the background after a theme switch took it away.
+  //
+  // Runs when the picker image lands, which is about a second after the switch:
+  // long enough that Omarchy has finished choosing the new theme's own first
+  // background, so this cannot race it. Omarchy's own command does the work --
+  // the same one the background picker runs -- so the effect is restored exactly
+  // as a pick would have put it there: symlink rewritten, shell told to show it.
+  function restoreWallpaper() {
+    if (!restoreBackground)
+      return
+    restoreBackground = false
+    if (!point)
+      return
+    restoreProcess.command = ["/usr/bin/timeout", "-k", "5", "30",
+                              "/usr/share/omarchy/bin/omarchy-theme-bg-set",
+                              thumbnail.outputPath]
+    restoreProcess.running = true
+  }
+
+  Process {
+    id: restoreProcess
+    clearEnvironment: true
+    environment: ({
+      HOME: root.home,
+      PATH: "/usr/share/omarchy/bin:/usr/bin:/bin",
+      XDG_RUNTIME_DIR: Quickshell.env("XDG_RUNTIME_DIR"),
+      WAYLAND_DISPLAY: Quickshell.env("WAYLAND_DISPLAY")
+    })
+    onExited: function(code) {
+      if (code !== 0)
+        console.warn("fractal: could not put the background back after the theme"
+                     + " change (exit " + code + ")")
+    }
   }
 
   // ----------------------------------------------------------------------
@@ -268,6 +386,22 @@ Item {
     onTriggered: if (!saverLever.running) saverLever.running = true
   }
 
+  // Turns Omarchy's own screensaver off, once. Its command flips a flag rather
+  // than setting one, so the lever is asked first.
+  Process {
+    id: saverOff
+    clearEnvironment: true
+    environment: ({ HOME: root.home, PATH: "/usr/share/omarchy/bin:/usr/bin:/bin" })
+    command: ["/usr/bin/bash", "-c",
+              "omarchy-toggle-enabled screensaver-off || omarchy-toggle screensaver-off"]
+    onExited: function() {
+      // Read the lever back, so the gate agrees with what just happened instead
+      // of waiting for the next poll.
+      if (!saverLever.running)
+        saverLever.running = true
+    }
+  }
+
   // The same primitive the shell's own idle service uses, with the same timeout
   // read from the same file.
   IdleMonitor {
@@ -318,7 +452,16 @@ Item {
     watchChanges: true
     printErrors: false
     onLoaded: palette.reload()
-    onFileChanged: reload()
+    onFileChanged: {
+      root.themeChangedAt = Date.now()
+      // The other half of the same question. The shell may already have been told
+      // about the new background, in which case it is the wallpaper change that
+      // carries the recency rather than this one.
+      if (!root.restoreBackground && !root.active && root.isMarker(root.previousWallpaper)
+          && Date.now() - root.backgroundChangedAt < root.themeSwitchWindow)
+        root.restoreBackground = true
+      root.reload()
+    }
   }
 
   // Fallback for a host that injects no `shell`. Idle whenever the binding works.
@@ -362,36 +505,23 @@ Item {
   IpcHandler {
     target: "fractal"
 
+    // Only what the panel does not cover. Every setting is in `fractal menu`,
+    // and the verbs for them still exist for scripting, but listing them here
+    // was noise: the panel is how they are meant to be changed.
     function help(): string {
-      var d = settings.defaults
       return [
-        "fps <n>                how many frames a second to draw. Lower is easier on the",
-        "                       gpu; higher looks smoother (" + d.fps + ")",
-        "scale <0.25-1>         draw at this fraction of the screen and stretch the result",
-        "                       back up. Lower is cheaper, softer and a bit flickery (" + d.scale + ")",
-        "speed <octaves/sec>    how fast it zooms in. Each point plays a loop whose length",
-        "                       follows from this, so every point zooms at the same rate ("
-          + d.speed + ")",
-        "bands <n>              how busy the colour banding is. Higher is more stripes ("
-          + d.bands + ")",
+        "menu                   open the settings panel: every setting as a",
+        "                       slider, field or switch, plus restore defaults",
         "pause <true|false|toggle>",
         "                       hold the animation still, or start it again",
-        "pauseWhenCovered <true|false|toggle>",
-        "                       hold it still while windows cover the whole screen",
-        "randompoint <true|false|toggle>",
-        "                       start on a different random point each time the shell",
-        "                       restarts (" + d.randomPoint + ")",
-        "point list             show the places in the set you can zoom into",
+        "defaults               put every setting back to its shipped value",
+        "point list             the places in the set you can zoom into",
         "point <name>           zoom into that one",
         "point next             move along to the next one",
         "point random           jump to one at random now",
-        "screensaver <on|off>   run this fractal as the idle screensaver instead of",
-        "                       Omarchy's. Needs theirs off first -- run",
-        "                       `omarchy toggle screensaver` -- or both would show",
-        "refresh                re-read your theme and settings, remake the picker image",
         "help                   this text",
         "",
-        "Every setting above also accepts `get` to read its value without changing it.",
+        "The panel covers the settings. `fractal <setting> get` still reads one.",
       ].join("\n")
     }
 
@@ -400,19 +530,19 @@ Item {
     }
 
     function fps(value: string): string {
-      return root.setNumber(value, "fps", 1, 1000)
+      return root.setNumber(value, "fps")
     }
 
     function speed(value: string): string {
-      return root.setNumber(value, "speed", 0.001, 4)
+      return root.setNumber(value, "speed")
     }
 
     function scale(value: string): string {
-      return root.setNumber(value, "scale", 0.25, 1)
+      return root.setNumber(value, "scale")
     }
 
     function bands(value: string): string {
-      return root.setNumber(value, "bands", 0.05, 20)
+      return root.setNumber(value, "bands")
     }
 
     function pause(value: string): string {
@@ -436,7 +566,7 @@ Item {
       if (value === "get" || value === "")
         return root.point
       if (value === "list")
-        return catalogue.names.join(" ")
+        return catalogue.variants.join(" ")
       if (value === "next")
         return root.chooseAndReport(catalogue.next(root.point))
       if (value === "random")
@@ -449,11 +579,84 @@ Item {
     function screensaver(value: string): string {
       return root.setScreensaver(value)
     }
+
+    function set(value: string): string {
+      return root.setMode(value)
+    }
+
+    function defaults(): string {
+      root.resetSettings()
+      return "defaults restored"
+    }
+
+    // Declared with no parameters on purpose: Quickshell rejects a call that
+    // does not supply every declared argument, and `fractal menu` has to work
+    // bare. It toggles, which is what a menu command wants to do anyway, and the
+    // panel also closes on Escape or a click outside.
+    function menu(): string {
+      if (root.menuOpen)
+        root.closeMenu()
+      else
+        root.openMenu()
+      return root.menuOpen ? "open" : "closed"
+    }
   }
 
   function chooseAndReport(name) {
     choose(name)
     return point
+  }
+
+  function chooseNext() {
+    return chooseAndReport(catalogue.next(point))
+  }
+
+  function chooseRandom() {
+    return chooseAndReport(catalogue.another(point))
+  }
+
+  // ----------------------------------------------------------------------
+  // Menu
+  //
+  // The panel is a window of this service rather than a `panel` or `menu` entry
+  // point, so it exists exactly while the service does and the command surface
+  // stays in one place -- the shape knappkevin.terminal-wallpaper uses. Every
+  // control in it calls the same functions the IPC verbs do, so the two cannot
+  // drift apart.
+  // ----------------------------------------------------------------------
+  property bool menuOpen: false
+
+  // The settings store, for the panel: it is an id rather than a property, so
+  // another file cannot reach it without this.
+  readonly property alias settingsStore: settings
+
+  // What the panel needs from the catalogue, which is likewise an id.
+  readonly property var pointNames: catalogue.variants
+
+  function openMenu() {
+    menuOpen = true
+  }
+
+  function closeMenu() {
+    menuOpen = false
+  }
+
+  // Hand the desktop back to the stock switcher. The panel closes first: both
+  // surfaces live on the overlay layer, and leaving ours up would leave the
+  // switcher somewhere behind it.
+  function changeWallpaper() {
+    closeMenu()
+    if (!switcher.running)
+      switcher.running = true
+  }
+
+  // Every setting back to its shipped value, then re-read and re-rendered: the
+  // point and the rendering may both have moved, so the picker image is stale.
+  function resetSettings() {
+    settings.reset()
+    sessionPoint = resolvedPoint()
+    phase = 0
+    reload()
   }
 
   // The stored value in force, with the same clamping the accessors apply, so a
@@ -468,13 +671,14 @@ Item {
     return settings.bands
   }
 
-  function setNumber(value, key, low, high) {
+  function setNumber(value, key) {
+    var range = settings.rangeFor(key)
     if (value !== "get") {
       var n = Number(value)
-      if (!(isFinite(n) && n >= low && n <= high))
-        return "usage: " + key + " get|<" + low + " to " + high + ">"
+      if (!(isFinite(n) && n >= range.minimum && n <= range.maximum))
+        return "usage: " + key + " get|<" + range.minimum + " to " + range.maximum + ">"
       var patch = {}
-      patch[key] = key === "fps" ? Math.round(n) : n
+      patch[key] = range.integer ? Math.round(n) : n
       settings.set(patch)
     }
     return String(settingNumber(key))
@@ -489,6 +693,11 @@ Item {
       return settings.screensaver ? "true" : "false"
     if (value === "on" || value === "true") {
       settings.set({ screensaver: true })
+      // Omarchy's own screensaver would win the same idle timeout and nothing of
+      // ours would appear. Its lever is a flag file and its command is a toggle,
+      // so this asks the lever first rather than flipping it blindly.
+      if (!saverOff.running)
+        saverOff.running = true
       // Deliberately no advice here. The flag is read on a timer, so any message
       // about it would be based on a reading up to a few seconds old -- and it
       // is wrong in exactly the case it exists for, the user who runs
@@ -504,6 +713,30 @@ Item {
     return "usage: screensaver get|on|off"
   }
 
+  // Switches which rendering the catalogue offers, carrying the current pick
+  // across: `julia` shows the same point's Julia set, `mandel` the Mandelbrot
+  // one, and `both` leaves the pick alone and just offers all twenty-four.
+  function setMode(value) {
+    if (value === "get" || value === "")
+      return mode
+    if (value !== "mandel" && value !== "julia" && value !== "both")
+      return "usage: set get|mandel|julia|both"
+
+    // Resolved in the mode we are leaving, so the pick is still a valid name.
+    var here = resolvedPoint()
+    var want = here
+    if (value === "julia" && !catalogue.isJulia(here))
+      want = here + catalogue.juliaSuffix
+    else if (value === "mandel" && catalogue.isJulia(here))
+      want = catalogue.base(here)
+
+    settings.set({ mode: value, point: want })
+    sessionPoint = want
+    phase = 0
+    wantThumbnail()
+    return value
+  }
+
   function setFlag(value, key) {
     if (value === "true" || value === "false") {
       var set = {}
@@ -517,6 +750,56 @@ Item {
       return "usage: " + key + " get|true|false|toggle"
     }
     return settings.flag(key) ? "true" : "false"
+  }
+
+  // ----------------------------------------------------------------------
+  // Double click on the desktop
+  //
+  // The effect's own surface has an empty input region on purpose, so the
+  // wallpaper's own gestures pass underneath it to Omarchy's picker. This is a
+  // second, transparent surface on the same layer as the wallpaper that catches
+  // the gesture first and opens the panel instead -- but only while the effect
+  // *is* the background. With any other image chosen the plugin is not
+  // responsible for the desktop and this must not be in the way.
+  // ----------------------------------------------------------------------
+  Variants {
+    model: Quickshell.screens
+
+    Scope {
+      id: desktopScope
+      required property var modelData
+
+      PanelWindow {
+        id: desktop
+        screen: desktopScope.modelData
+
+        visible: root.active
+        anchors { top: true; bottom: true; left: true; right: true }
+        color: "transparent"
+        updatesEnabled: true
+        exclusionMode: ExclusionMode.Ignore
+
+        WlrLayershell.namespace: "omarchy-fractal-input"
+        WlrLayershell.layer: WlrLayer.Background
+        WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+        ScreenMoveRemap {
+          window: desktop
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          acceptedButtons: Qt.LeftButton | Qt.RightButton
+          onDoubleClicked: function(mouse) {
+            if (mouse.button === Qt.LeftButton)
+              root.openMenu()
+            else
+              root.changeWallpaper()
+            mouse.accepted = true
+          }
+        }
+      }
+    }
   }
 
   // One surface per screen. The scene is a single full-screen shader, so there
