@@ -7,7 +7,7 @@
 //
 // Build: gcc -O2 -fopenmp -o perturb perturb.c -lquadmath -lm
 //
-//   perturb <orbitfile> <q> <p> <halfwidth> <rotturns> <maxiter> <W> <H> <out.bin> [julia]
+//   perturb <orbitfile> <q> <p> <halfwidth> <rotturns> <maxiter> <W> <H> <out.bin> [julia] [degree]
 //
 // orbitfile holds "k re im" per line at arbitrary precision, q+p of them.
 // out.bin is W*H little endian float32 escape counts; negative means no escape.
@@ -16,6 +16,12 @@
 // the perturbation seeds with the pixel's offset and nothing is added to it at
 // any step. The reference orbit is the same critical orbit either way -- that is
 // what makes one point worth rendering two ways.
+//
+// The family is z -> z^degree + c, degree defaulting to 2, so every existing
+// point and caller is unchanged. The perturbation step is the binomial
+// expansion of (Z + e)^degree about the reference Z, which is the same
+// expression for every degree; only the escape count's normalisation names the
+// degree, because the potential goes as log_degree.
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -25,6 +31,14 @@
 
 static double zr[MAXORB], zr2[MAXORB], zi[MAXORB], zi2[MAXORB];
 
+// Binomial coefficients, small enough to compute rather than tabulate.
+static double binom(int n, int k) {
+  double r = 1;
+  for (int i = 1; i <= k; i++)
+    r = r * (n - k + i) / i;
+  return r;
+}
+
 static void split(__float128 x, double *hi, double *lo) {
   *hi = (double)x;
   *lo = (double)(x - (__float128)*hi);
@@ -32,7 +46,8 @@ static void split(__float128 x, double *hi, double *lo) {
 
 int main(int argc, char **argv) {
   if (argc < 10) {
-    fprintf(stderr, "usage: perturb orbitfile q p halfwidth rotturns maxiter W H out.bin [julia]\n");
+    fprintf(stderr, "usage: perturb orbitfile q p halfwidth rotturns maxiter W H out.bin"
+                    " [julia] [degree]\n");
     return 2;
   }
   int q = atoi(argv[2]), p = atoi(argv[3]);
@@ -42,6 +57,8 @@ int main(int argc, char **argv) {
   int W = atoi(argv[7]), H = atoi(argv[8]);
   const char *out = argv[9];
   int julia = argc > 10 && argv[10][0] == 'j';
+  int degree = argc > 11 ? atoi(argv[11]) : 2;
+  if (degree < 2) degree = 2;
   int np = q + p;
 
   FILE *g = fopen(argv[1], "r");
@@ -85,15 +102,53 @@ int main(int argc, char **argv) {
         int idx = k < q ? k : q + (k - q) % p;
         double hiz = zr[idx], loz = zr2[idx];
         double hix = zi[idx], lox = zi2[idx];
-        double nx = 2 * (hiz * ex - hix * ey + loz * ex - lox * ey);
-        double ny = 2 * (hiz * ey + hix * ex + loz * ey + lox * ex);
-        double rx = nx + (ex * ex - ey * ey) + (julia ? 0 : dx);
-        double ry = ny + (2 * ex * ey) + (julia ? 0 : dy);
-        ex = rx; ey = ry;
+        // e <- sum over j of C(d,j) Z^(d-j) e^j, plus dc. Horner in e, from the
+        // highest power down: each pass multiplies the accumulator by e and adds
+        // the next coefficient. Degree 2 gives 2Ze + e^2, which is what this
+        // always did.
+        //
+        // Z is carried as hi + lo. Only the linear coefficient d*Z^(d-1) folds
+        // in lo, and only to first order, for the same reason as before: e is
+        // small, so lo against a higher power of e is below the noise. The
+        // first-order change of d*Z^(d-1) under Z -> Z + lo is
+        // d(d-1) Z^(d-2) lo, and the d is applied by the coefficient below, so
+        // what is added to Z^(d-1) here is (d-1) Z^(d-2) lo.
+        double ax = 0, ay = 0;
+        for (int j = degree; j >= 1; j--) {
+          double tx = ax * ex - ay * ey;
+          double ty = ax * ey + ay * ex;
+          double px = 1, py = 0;
+          for (int t = 0; t < degree - j; t++) {
+            double qx = px * hiz - py * hix;
+            double qy = px * hix + py * hiz;
+            px = qx; py = qy;
+          }
+          if (j == 1 && degree > 1) {
+            double lx = 1, ly = 0;
+            for (int t = 0; t < degree - 2; t++) {
+              double qx = lx * hiz - ly * hix;
+              double qy = lx * hix + ly * hiz;
+              lx = qx; ly = qy;
+            }
+            double k2 = degree - 1;
+            px += k2 * (lx * loz - ly * lox);
+            py += k2 * (lx * lox + ly * loz);
+          }
+          double coef = binom(degree, j);
+          ax = tx + coef * px;
+          ay = ty + coef * py;
+        }
+        // Every coefficient carries a power of e, so the accumulator built above
+        // is one factor short of the polynomial: (Z+e)^d - Z^d = e * Q(e).
+        double fx = ax * ex - ay * ey;
+        double fy = ax * ey + ay * ex;
+        ex = fx + (julia ? 0 : dx);
+        ey = fy + (julia ? 0 : dy);
         double zx = hiz + ex, zy = hix + ey;
         double m = zx * zx + zy * zy;
         if (m > 65536.0) {
-          val = k + 1 - log2(log(m) / (2 * log(2)));
+          // log_degree, so the count means the same thing whatever the degree
+          val = k + 1 - log2(log(m) / (2 * log(2))) / log2(degree);
           break;
         }
       }

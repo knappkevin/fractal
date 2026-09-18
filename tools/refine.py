@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Refine a Misiurewicz point of preperiod q / period p to arbitrary precision and
-emit its preperiodic orbit.  Pure decimal complex arithmetic, no third-party deps."""
+emit its preperiodic orbit.  Pure decimal complex arithmetic, no third-party deps.
+
+The family is z -> z^degree + c.  Degree 2 is the Mandelbrot set and is the
+default, so every existing caller and point is unchanged; 3 and 4 are the
+multibrot sets, which have Misiurewicz points of their own and renormalise the
+same way.
+
+usage: refine.py <re> <im> <q> <p> [degree]"""
 import sys
 from decimal import Decimal, getcontext, localcontext
 
@@ -24,33 +31,49 @@ def div(a, b):
     return ((a[0] * b[0] + a[1] * b[1]) / d, (a[1] * b[0] - a[0] * b[1]) / d)
 
 
-def orbit_and_deriv(c, n):
-    """Return (z_n, dz_n) where z_0 = 0, z_{k+1} = z_k^2 + c."""
+def power_map(z, c, degree):
+    """z^degree + c, by repeated multiplication: exact for any small integer."""
+    out = (Decimal(1), Decimal(0))
+    for _ in range(degree):
+        out = mul(out, z)
+    return add(out, c)
+
+
+def power_deriv(z, degree):
+    """d/dz of z^degree, that is degree * z^(degree-1)."""
+    out = (Decimal(degree), Decimal(0))
+    for _ in range(degree - 1):
+        out = mul(out, z)
+    return out
+
+
+def orbit_and_deriv(c, n, degree=2):
+    """Return (z_n, dz_n) where z_0 = 0, z_{k+1} = z_k^degree + c."""
     z = (Decimal(0), Decimal(0))
     dz = (Decimal(0), Decimal(0))
     for _ in range(n):
-        dz = add(mul((Decimal(2) * z[0], Decimal(2) * z[1]), dz), (Decimal(1), Decimal(0)))
-        z = add(mul(z, z), c)
+        dz = add(mul(power_deriv(z, degree), dz), (Decimal(1), Decimal(0)))
+        z = power_map(z, c, degree)
     return z, dz
 
 
-def refine(cre, cim, q, p, iters=60):
+def refine(cre, cim, q, p, iters=60, degree=2):
     c = (Decimal(cre), Decimal(cim))
     n = q + p
     for _ in range(iters):
-        zn, dzn = orbit_and_deriv(c, n)
-        zq, dzq = orbit_and_deriv(c, q)
+        zn, dzn = orbit_and_deriv(c, n, degree)
+        zq, dzq = orbit_and_deriv(c, q, degree)
         g = sub(zn, zq)
         dg = sub(dzn, dzq)
         c = sub(c, div(g, dg))
     return c
 
 
-def orbit(c, n):
+def orbit(c, n, degree=2):
     z = (Decimal(0), Decimal(0))
     out = [z]
     for _ in range(n):
-        z = add(mul(z, z), c)
+        z = power_map(z, c, degree)
         out.append(z)
     return out
 
@@ -58,10 +81,11 @@ def orbit(c, n):
 def main():
     cre, cim = sys.argv[1], sys.argv[2]
     q, p = int(sys.argv[3]), int(sys.argv[4])
-    c = refine(cre, cim, q, p)
+    degree = int(sys.argv[5]) if len(sys.argv) > 5 else 2
+    c = refine(cre, cim, q, p, degree=degree)
     print("# c = %s + %si" % (c[0], c[1]))
-    print("# q=%d p=%d" % (q, p))
-    zs = orbit(c, q + p)
+    print("# q=%d p=%d degree=%d" % (q, p, degree))
+    zs = orbit(c, q + p, degree)
     # verify preperiodicity to the working precision
     d = abs(zs[q + p][0] - zs[q][0]) + abs(zs[q + p][1] - zs[q][1])
     print("# |z_{q+p} - z_q| = %s" % d)

@@ -143,6 +143,7 @@ Item {
     id: catalogue
     path: root.pluginDir + "/mandelbrot/points/index.json"
     mode: root.mode
+    power: settings.powers
     onNamesChanged: root.onCatalogueReady()
   }
 
@@ -580,6 +581,11 @@ Item {
       return root.setScreensaver(value)
     }
 
+    function power(value: string): string {
+      return root.setPower(value)
+    }
+
+
     function set(value: string): string {
       return root.setMode(value)
     }
@@ -632,6 +638,9 @@ Item {
 
   // What the panel needs from the catalogue, which is likewise an id.
   readonly property var pointNames: catalogue.variants
+
+  // The degrees the catalogue can actually draw, for the panel's control.
+  readonly property var pointDegrees: catalogue.availablePowers
 
   function openMenu() {
     menuOpen = true
@@ -716,6 +725,26 @@ Item {
   // Switches which rendering the catalogue offers, carrying the current pick
   // across: `julia` shows the same point's Julia set, `mandel` the Mandelbrot
   // one, and `both` leaves the pick alone and just offers all twenty-four.
+  // Switches family. A pick carries across by name where the new degree offers
+  // that name, and falls back to that degree's own default where it does not.
+  function setPower(value) {
+    if (value === "get" || value === "")
+      return String(settings.powers)
+    var n = Math.round(Number(value))
+    if (n !== 2 && n !== 3 && n !== 4)
+      return "usage: power get|2|3|4"
+    // Refuse a degree with no points rather than accepting it and quietly
+    // drawing another one.
+    if (catalogue.availablePowers.indexOf(n) < 0)
+      return "no degree " + n + " points in the catalogue; have " + catalogue.availablePowers.join(" ")
+    settings.set({ power: n })
+    sessionPoint = resolvedPoint()
+    phase = 0
+    wantThumbnail()
+    return String(n)
+  }
+
+
   function setMode(value) {
     if (value === "get" || value === "")
       return mode

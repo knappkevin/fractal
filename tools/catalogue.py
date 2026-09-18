@@ -76,12 +76,10 @@ def read_field(path):
     return struct.unpack("<%df" % (len(raw) // 4), raw)
 
 
-def field_for(orbit, q, p, half_w, rot, budget, tag, mode="mandel"):
+def field_for(orbit, q, p, half_w, rot, budget, tag, mode="mandel", degree=2):
     out = os.path.join(WORK, "catalogue_%s.bin" % tag)
     cmd = [PERTURB, orbit, str(q), str(p), repr(half_w), repr(rot),
-           str(budget), str(GRID_W), str(GRID_H), out]
-    if mode == "julia":
-        cmd.append("julia")
+           str(budget), str(GRID_W), str(GRID_H), out, mode, str(degree)]
     r = subprocess.run(cmd, stderr=subprocess.PIPE)
     if r.returncode != 0:
         return None, 0
@@ -118,7 +116,13 @@ def score(pt, tag, mode="mandel"):
     """
     c_re, c_im = pt["c_re"], pt["c_im"]
     q, p = pt["q"], pt["p"]
-    want_drift = (2 if mode == "julia" else 1) * p
+    degree = int(pt.get("power", 2))
+    # One loop renormalises the picture; the escape count it gains is the period,
+    # or the degree times the period for the Julia rendering, whose counts run
+    # faster because the potential goes as log_degree. Measured, not assumed: the
+    # twelve quadratic points gave 1x and 2x, and the multibrot points give their
+    # own degree.
+    want_drift = (degree if mode == "julia" else 1) * p
     orbit = os.path.join(WORK, "catalogue_%s.orb" % tag)
     with open(orbit, "w") as fh:
         for k, (re, im) in enumerate(pt["orbit"]):
@@ -130,8 +134,8 @@ def score(pt, tag, mode="mandel"):
     for depth in DEPTHS:
         hw0 = FULL_HW * 2.0 ** -depth
         hw1 = hw0 * 2.0 ** -oct_loop
-        a, wa = field_for(orbit, q, p, hw0, 0.0, MEASURE_BUDGET, tag + "a", mode)
-        b, wb = field_for(orbit, q, p, hw1, rot_loop, MEASURE_BUDGET, tag + "b", mode)
+        a, wa = field_for(orbit, q, p, hw0, 0.0, MEASURE_BUDGET, tag + "a", mode, degree)
+        b, wb = field_for(orbit, q, p, hw1, rot_loop, MEASURE_BUDGET, tag + "b", mode, degree)
         if a is None or b is None:
             return "the reference renderer failed"
         got = spread(a, b)
@@ -149,7 +153,7 @@ def score(pt, tag, mode="mandel"):
         for ph in PHASES[1:-1]:
             hw = hw0 * 2.0 ** (-oct_loop * ph)
             f, w = field_for(orbit, q, p, hw, rot_loop * ph, MEASURE_BUDGET,
-                             tag + "p%d" % int(ph * 100), mode)
+                             tag + "p%d" % int(ph * 100), mode, degree)
             if f is not None:
                 worst = max(worst, w)
         # Anchor the palette to the frame rather than to zero. A deep zoom never
@@ -157,7 +161,12 @@ def score(pt, tag, mode="mandel"):
         # -- so a palette indexed from zero starts partway up its own cycle and
         # the far field comes out mid-ramp instead of on the background.
         floor = min(x for x in a if x >= 0)
-        return (median, wide), worst, hw0, floor
+        # Where the visible structure sits. The maximum can belong to a handful of
+        # pixels far deeper than anything on screen, and scaling the palette to
+        # that stretches it over counts nothing occupies.
+        esc = sorted(x for x in a if x >= 0)
+        scale_ref = esc[min(len(esc) - 1, int(0.95 * len(esc)))]
+        return (median, wide), worst, hw0, floor, scale_ref
     return ("the renormalisation has not settled by 2^-%d" % DEPTHS[-1])
 
 
@@ -183,7 +192,7 @@ def calibrate_julia():
         if isinstance(got, str):
             print("%-12s julia rejected: %s" % (name, got))
             continue
-        (drift, spread_steps), worst, _hw0, floor = got
+        (drift, spread_steps), worst, _hw0, floor, scale_ref = got
         cycles = max(1, int((worst * 1.15 + 8 - pt["q"]) // pt["p"]) + 1)
         pt["julia"] = {
             # Escape steps the loop *gains*, which is what the shader subtracts as
@@ -193,7 +202,7 @@ def calibrate_julia():
             "seam_spread": spread_steps,
             "worst_escape": worst,
             "maxiter": pt["q"] + cycles * pt["p"],
-            "pal_scale": round(BANDS / max(1.0, worst), 6),
+            "pal_scale": round(BANDS / max(1.0, scale_ref), 6),
             "pal_offset": round(floor, 3),
         }
         json.dump(pt, open(path, "w"), indent=2)
@@ -225,7 +234,9 @@ def main():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        name, re, im, q, p = line.split()
+        parts = line.split()
+        name, re, im, q, p = parts[:5]
+        degree = int(parts[5]) if len(parts) > 5 else 2
         q, p = int(q), int(p)
         if only and name != only:
             continue
@@ -243,7 +254,7 @@ def main():
             continue
 
         tmp = os.path.join(WORK, "catalogue_%s.ref" % name)
-        r = subprocess.run([PYPY, PREFIX, re, im, str(q), str(p)],
+        r = subprocess.run([PYPY, PREFIX, re, im, str(q), str(p), str(degree)],
                            stdout=open(tmp, "w"), stderr=subprocess.PIPE)
         if r.returncode != 0:
             print("%-12s refine failed" % name)
@@ -261,7 +272,7 @@ def main():
             rejected.append(name)
             continue
 
-        (drift, spread_steps), worst, hw0, floor = got
+        (drift, spread_steps), worst, hw0, floor, scale_ref = got
         cycles = max(1, int((worst * 1.15 + 8 - pt["q"]) // pt["p"]) + 1)
         pt["maxiter"] = pt["q"] + cycles * pt["p"]
         pt["half_w0"] = hw0
@@ -270,7 +281,9 @@ def main():
         pt["worst_escape"] = worst
         # Band frequency has to come from the point: escape counts run to 49 on
         # one point and 254 on another, so a fixed scale renders one as a flat
-        # wash and the other as noise.
+        # wash and the other as noise. Measured from the frame's maximum, which is
+        # the convention every shipped point was tuned under -- a quantile is
+        # 2-6x busier and would move all twelve.
         pt["pal_scale"] = round(BANDS / max(1.0, worst), 6)
         pt["pal_offset"] = round(floor, 3)
         json.dump(pt, open(dst, "w"), indent=2)

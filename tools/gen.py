@@ -15,6 +15,50 @@ import json
 import sys
 
 
+def binom(n, k):
+    r = 1
+    for i in range(1, k + 1):
+        r = r * (n - k + i) // i
+    return r
+
+
+def step_statements(degree, dc):
+    """The perturbation step: e <- sum_j C(d,j) Z^(d-j) e^j + dc, Horner in e.
+
+    Returns GLSL statements, not an expression, because GLSL multiplies vec2
+    component-wise: `zn * zn` is (zn.x*zn.x, zn.y*zn.y), NOT the complex square.
+    Every power of the reference has to be written out as a complex product, or
+    the leading coefficient is wrong and the picture comes out as flat bands.
+
+    Degree 2 keeps the exact text it has always had, so the twelve shipped points
+    regenerate byte-identical shaders rather than merely equivalent ones.
+    """
+    if degree == 2:
+        return ("e = vec2(2.0 * (zn.x * e.x - zn.y * e.y) + e.x * e.x - e.y * e.y%(addx)s, \\\n"
+                "                 2.0 * (zn.y * e.x + zn.x * e.y) + 2.0 * e.x * e.y%(addy)s);"
+                % dict(addx=("" if dc else " + d.x"), addy=("" if dc else " + d.y")))
+    lines = ["vec2 z2 = vec2(zn.x * zn.x - zn.y * zn.y, 2.0 * zn.x * zn.y);"]
+    powers = {0: "vec2(1.0)", 1: "zn", 2: "z2"}
+    for k in range(3, degree):
+        prev = powers[k - 1]
+        powers[k] = "z%d" % k
+        lines.append("vec2 %s = vec2(%s.x * zn.x - %s.y * zn.y,"
+                     " %s.x * zn.y + %s.y * zn.x);" % (powers[k], prev, prev, prev, prev))
+    # Horner from the highest power down. GLSL multiplies vec2 component-wise, so
+    # the multiply by e must be a complex product as well -- writing (acc * e)
+    # squares the two parts independently and destroys the iteration.
+    coeffs = ["%r * %s" % (float(binom(degree, k + 1)), powers[degree - 1 - k])
+              for k in range(degree - 1, -1, -1)]
+    lines.append("vec2 a = %s;" % coeffs[0])
+    for c in coeffs[1:]:
+        lines.append("a = vec2(a.x * e.x - a.y * e.y + %s.x,"
+                     " a.x * e.y + a.y * e.x + %s.y);" % (c, c))
+    lines.append("e = vec2(a.x * e.x - a.y * e.y%s, a.x * e.y + a.y * e.x%s);"
+                 % ("" if dc else " + d.x", "" if dc else " + d.y"))
+    return " \\\n        ".join(lines)
+
+
+
 def main():
     with open(sys.argv[1]) as fh:
         pt = json.load(fh)
@@ -33,6 +77,7 @@ def main():
     variant = pt.get("julia") if julia and isinstance(pt.get("julia"), dict) else None
     if variant:
         maxiter = int(variant["maxiter"])
+    degree = int(pt.get("power", 2))
     cycles = max(1, (maxiter - q) // p)
     total = q + cycles * p
 
@@ -117,8 +162,7 @@ void main() {
 
 #define STEP(I) { \\
         zn = ORB[I]; \\
-        e = vec2(2.0 * (zn.x * e.x - zn.y * e.y) + e.x * e.x - e.y * e.y%(addx)s, \\
-                 2.0 * (zn.y * e.x + zn.x * e.y) + 2.0 * e.x * e.y%(addy)s); \\
+        %(step)s \\
         iter += 1.0; \\
         m2 = dot(e, e); \\
         if (m2 > 65536.0) esc = true; \\
@@ -140,7 +184,7 @@ void main() {
 
     // Smooth escape count, with the per-loop drift removed so the palette lines
     // up exactly when the loop wraps.
-    float n = iter - log2(0.5 * log2(m2));
+%(degreeComment)s    float n = iter - log2(0.5 * log2(m2))%(degreeNorm)s;
     fragColor = vec4(palette(PAL_SCALE * uPalScale * (n - PAL_OFFSET - DRIFT * uPhase)).rgb, 1.0) * qt_Opacity;
 }
 """ % dict(
@@ -153,8 +197,11 @@ void main() {
               "\n// perturbation seeds with the pixel's own offset and nothing is added"
               "\n// to it at any step." if julia else ""),
         init=("d" if julia else "vec2(0.0)"),
-        addx=("" if julia else " + d.x"),
-        addy=("" if julia else " + d.y"),
+        step=step_statements(degree, julia),
+        degreeNorm=("" if degree == 2 else " / log2(%d.0)" % degree),
+        degreeComment=("" if degree == 2 else
+                       "    // The potential goes as log_degree, and this point is\n"
+                       "    // degree %d, so the escape count is normalised by it.\n" % degree),
         oct=pt["oct_per_loop"], rot=pt["rot_per_loop"],
         # Both measured per variant. The Mandelbrot rendering gains the period
         # per loop and anchors its palette on its own escape floor; the Julia one
@@ -170,8 +217,8 @@ void main() {
     )
     with open(out, "w") as fh:
         fh.write(src)
-    print("wrote %s: %d steps per pixel (%d cycles of %d after %d preperiod)"
-          % (out, total, cycles, p, q))
+    print("wrote %s: degree %d, %d steps per pixel (%d cycles of %d after %d preperiod)"
+          % (out, degree, total, cycles, p, q))
 
 
 main()

@@ -224,9 +224,8 @@ def main():
             fh.write(lut_bytes())
         cmd = [PERTURB, orb, str(pt["q"]), str(pt["p"]), repr(hw), repr(rot),
                str(variant["maxiter"] if variant else pt["maxiter"]),
-               str(W), str(H), field]
-        if julia:
-            cmd.append("julia")
+               str(W), str(H), field, "julia" if julia else "mandel",
+               str(int(pt.get("power", 2)))]
         subprocess.run(cmd, check=True, stderr=subprocess.DEVNULL)
         # Resolving the ramp, flipping the frame and averaging it down are a pass
         # over two million values, which is where the time went. The helper does

@@ -194,6 +194,14 @@ PanelWindow {
             }
 
             Dropdown {
+              label: "Family"
+              width: parent.width
+              value: String(menu.service.settingsStore.powers)
+              options: menu.service.pointDegrees.map(function(d) { return String(d) })
+              onChanged: function(v) { menu.service.setPower(v) }
+            }
+
+            Dropdown {
               label: "Place in the set"
               width: parent.width
               value: menu.service.point

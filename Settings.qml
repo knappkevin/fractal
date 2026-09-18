@@ -43,7 +43,8 @@ QtObject {
     markers: true,
     poll: false,
     screensaver: false,      // show this fractal as the idle screensaver
-    mode: "both"           // "mandel", "julia", or "both"
+    mode: "both", // "mandel", "julia", or "both",
+    power: 2                 // the family: z^2 + c, z^3 + c or z^4 + c
   })
 
   function defaultsFor(key) {
@@ -172,6 +173,13 @@ QtObject {
   readonly property string mode: {
     var m = String(raw("mode"))
     return (m === "julia" || m === "both") ? m : "mandel"
+  }
+
+  // Which family. Anything outside 2..4 falls back to the Mandelbrot set, which
+  // is the one the plugin has always drawn.
+  readonly property int powers: {
+    var v = Math.round(Number(raw("power")))
+    return (v === 3 || v === 4) ? v : 2
   }
 
   // The point named by hand, if any. Whether it is usable, and what to show when

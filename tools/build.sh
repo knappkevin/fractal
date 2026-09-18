@@ -36,19 +36,70 @@ for p in mandelbrot/points/*.json; do
   done
 done
 
+# The loop above deletes every shader before remaking them, so a point whose
+# generator fails leaves that point with no shader at all -- and a missing .qsb
+# is a ShaderEffect that draws nothing, which looks exactly like a broken point
+# rather than a broken build. Say so rather than shipping it.
+python3 - <<'PYCHK'
+import glob, json, os, sys
+points = [p for p in sorted(glob.glob("mandelbrot/points/*.json"))
+          if not p.endswith("index.json")]
+missing = []
+for p in points:
+    n = json.load(open(p))["name"]
+    for suf in ("", "-julia"):
+        for ext in (".frag", ".frag.qsb"):
+            f = "mandelbrot/shaders/%s%s%s" % (n, suf, ext)
+            if not os.path.exists(f):
+                missing.append(f)
+if missing:
+    print("MISSING %d shader artifacts -- these points would draw nothing:" % len(missing))
+    for f in missing:
+        print("  " + f)
+    sys.exit(1)
+print("shaders: %d points, every artifact present" % len(points))
+PYCHK
+
 python3 - <<'PY'
 import json, glob, os
-names, octaves = [], {}
+names, octaves, powers = [], {}, {}
 for p in sorted(glob.glob("mandelbrot/points/*.json")):
     if p.endswith("index.json"):
         continue
     pt = json.load(open(p))
     names.append(pt["name"])
     octaves[pt["name"]] = round(pt["oct_per_loop"], 4)
-json.dump({"points": names, "octaves": octaves, "default": "snowflake"},
+    powers[pt["name"]] = int(pt.get("power", 2))
+json.dump({"points": names, "octaves": octaves, "powers": powers,
+           "default": "snowflake"},
           open("mandelbrot/points/index.json", "w"), indent=2)
 print("index: %d points" % len(names))
 PY
+
+# GLSL multiplies vec2 component-wise, so a step that multiplies one vector by
+# another is not doing complex arithmetic and the point renders as flat bands.
+# The degree-2 step spells its complex products out; so must any other degree.
+python3 - <<'PYGLSL'
+import glob, re, sys
+pat = re.compile(r"\)\s*\*\s*(e|zn|z[0-9])\b")
+bad = []
+for f in sorted(glob.glob("mandelbrot/shaders/*.frag")):
+    text = open(f).read()
+    if "#define STEP" not in text:
+        continue
+    step = text.split("#define STEP", 1)[1].split("#undef STEP", 1)[0]
+    for line in step.splitlines():
+        if pat.search(line):
+            bad.append((f, line.strip()))
+if bad:
+    print("VECTOR PRODUCT IN A PERTURBATION STEP -- GLSL * is component-wise:")
+    for f, l in bad:
+        print("  %s" % f)
+        print("    %s" % l)
+    sys.exit(1)
+print("glsl: every perturbation step uses complex products")
+PYGLSL
+
 
 # What ships, and the toolchain that produced it. A committed binary can only be
 # trusted as far as it can be rebuilt, so record both: anyone can rerun this

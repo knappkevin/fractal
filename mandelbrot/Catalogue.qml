@@ -23,9 +23,15 @@ QtObject {
   // Which renderings to offer: "mandel", "julia", or "both".
   property string mode: "mandel"
 
+  // Which family: z^2 + c, z^3 + c or z^4 + c. Each degree has Misiurewicz
+  // points of its own, so this selects which of them are offered rather than
+  // being a dial on any one of them.
+  property int power: 2
+
   // Base names from the point file.
   property var names: ["snowflake"]
   property var octaves: ({})
+  property var powers: ({})
   property string fallback: "snowflake"
 
   readonly property string juliaSuffix: "-julia"
@@ -35,18 +41,50 @@ QtObject {
   // report a binding loop on `point` earlier, and there is no need to risk it.
   property var variants: ["snowflake"]
 
+  // Degree 2 for a point file written before degrees existed, or one that did
+  // not record it.
+  function powerOf(name) {
+    var v = Number(powers[String(name)])
+    return isFinite(v) && v > 0 ? v : 2
+  }
+
+  // The degrees this catalogue actually has points for, ascending. The panel
+  // offers these and nothing else: a family with no points would otherwise be
+  // selectable and would silently show the fallback, which reads as the plugin
+  // ignoring the choice.
+  readonly property var availablePowers: {
+    var seen = [], out = []
+    for (var i = 0; i < names.length; i++) {
+      var d = powerOf(names[i])
+      if (seen.indexOf(d) < 0) { seen.push(d); out.push(d) }
+    }
+    out.sort(function(a, b) { return a - b })
+    return out.length ? out : [2]
+  }
+
   function rebuild() {
     var suffixes = mode === "julia" ? [juliaSuffix]
                  : (mode === "both" ? ["", juliaSuffix] : [""])
+    // A stored degree the catalogue has no points for resolves to the lowest it
+    // does have, so an old setting can never leave the plugin with nothing.
+    var have = availablePowers || [2]
+    var use = have.indexOf(power) >= 0 ? power : have[0]
     var out = []
     for (var s = 0; s < suffixes.length; s++)
       for (var i = 0; i < names.length; i++)
-        out.push(names[i] + suffixes[s])
+        if (powerOf(names[i]) === use)
+          out.push(names[i] + suffixes[s])
     variants = out.length ? out : ["snowflake"]
+    // The fallback has to be a point this degree offers, or a pick would
+    // resolve to a name the catalogue cannot draw.
+    if (names.indexOf(fallback) < 0 || powerOf(fallback) !== use)
+      for (var j = 0; j < names.length; j++)
+        if (powerOf(names[j]) === use) { fallback = names[j]; break }
   }
 
   onModeChanged: rebuild()
   onNamesChanged: rebuild()
+  onPowerChanged: rebuild()
 
   // The name to fall back to when a pick is not offered in this mode.
   readonly property string defaultVariant:
@@ -106,6 +144,7 @@ QtObject {
     var list = Array.isArray(o.points) && o.points.length ? o.points : ["snowflake"]
     names = list
     octaves = o.octaves || ({})
+    powers = o.powers || ({})
     fallback = list.indexOf(o.default) >= 0 ? o.default : list[0]
     rebuild()
   }
