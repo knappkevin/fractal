@@ -18,7 +18,9 @@ renderer (a pixel that escapes stops, so anything past the median is free), but
 it does have to be big enough or the deep filaments go black.
 
 usage: catalogue.py [--only name] [--keep] [candidates.txt]
-       catalogue.py --julia      measure the Julia rendering of every point
+       catalogue.py --julia [--only name]
+                                 measure the Julia rendering of every point,
+                                 or of one of them
 """
 import atexit
 import glob
@@ -106,6 +108,18 @@ def spread(a, b):
     return d[n // 2], d[(3 * n) // 4] - d[n // 4]
 
 
+# Octaves closer in for a family whose frame is a thin web in a large field. The
+# gate settles the renormalisation at a depth that is wide for these points, and a
+# wide view of a thin web reads as zoomed out. 0 keeps degree 2 exactly as it was.
+# (degree, mode) -> octaves closer in than the depth the gate settled on. The
+# Julia rendering gets none: its offset is the pixel's position within the view,
+# so the view has to stay wider than the reference orbit's float32 rounding error
+# or the offset is all noise, which shows as a hole where the orbit lingers.
+EXTRA_OCTAVES = {(2, "mandel"): 0, (2, "julia"): 0,
+                 (3, "mandel"): 7, (3, "julia"): 0,
+                 (4, "mandel"): 7, (4, "julia"): 0}
+
+
 def score(pt, tag, mode="mandel"):
     """Return ((drift, spread), worst, half_w), or a reason string if unusable.
 
@@ -160,18 +174,46 @@ def score(pt, tag, mode="mandel"):
         # contains a pixel with a small escape count -- this view runs 31 to 178
         # -- so a palette indexed from zero starts partway up its own cycle and
         # the far field comes out mid-ramp instead of on the background.
+        # Deepen the start for a sparse family, then measure the palette and the
+        # budget on the frame it will actually open on.
+        extra = EXTRA_OCTAVES.get((degree, mode), 0)
+        if extra:
+            hw0 = hw0 * 2.0 ** -extra
+            deep, wd = field_for(orbit, q, p, hw0, 0.0, MEASURE_BUDGET,
+                                 tag + "deep", mode, degree)
+            if deep is None:
+                return "the reference renderer failed at the start depth"
+            worst = max(worst, wd)
+            # ...and the deepest frame of the loop, which is where the escape
+            # counts are highest and the budget is most likely to be short.
+            end, we = field_for(orbit, q, p,
+                                hw0 * 2.0 ** -pt["oct_per_loop"], rot_loop,
+                                MEASURE_BUDGET, tag + "end", mode, degree)
+            if end is not None:
+                worst = max(worst, we)
+            a = deep
+
         floor = min(x for x in a if x >= 0)
         # Where the visible structure sits. The maximum can belong to a handful of
         # pixels far deeper than anything on screen, and scaling the palette to
         # that stretches it over counts nothing occupies.
+        # Where the visible structure sits. Scaling to the frame's maximum lets a
+        # few deep pixels stretch one palette cycle over counts nothing occupies,
+        # so a sparse frame comes out in two colours -- mb3b's Mandelbrot view
+        # spanned 0.39 of a cycle. The 95th percentile is the top of what is
+        # actually on screen.
         esc = sorted(x for x in a if x >= 0)
         scale_ref = esc[min(len(esc) - 1, int(0.95 * len(esc)))]
         return (median, wide), worst, hw0, floor, scale_ref
     return ("the renormalisation has not settled by 2^-%d" % DEPTHS[-1])
 
 
-def calibrate_julia():
-    """Measure the Julia rendering of every point already in the catalogue.
+def calibrate_julia(only=None):
+    """Measure the Julia rendering of the points already in the catalogue.
+
+    `only` limits it to one, which matters because this pass rewrites a block of
+    a file that also holds constants tuned by hand: re-measuring a point whose
+    colours were adjusted deliberately throws that away.
 
     The main pass measures the Mandelbrot rendering. These are separate because
     the two have different escape ranges -- the Julia counts run about twice as
@@ -187,17 +229,21 @@ def calibrate_julia():
         if path.endswith("index.json"):
             continue
         name = os.path.basename(path)[:-5]
+        if only and name != only:
+            continue
         pt = json.load(open(path))
         got = score(pt, name + "-julia", "julia")
         if isinstance(got, str):
             print("%-12s julia rejected: %s" % (name, got))
             continue
         (drift, spread_steps), worst, _hw0, floor, scale_ref = got
-        cycles = max(1, int((worst * 1.15 + 8 - pt["q"]) // pt["p"]) + 1)
+        margin = 1.15 if int(pt.get("power", 2)) == 2 else 1.6
+        cycles = max(1, int((worst * margin + 8 - pt["q"]) // pt["p"]) + 1)
         pt["julia"] = {
             # Escape steps the loop *gains*, which is what the shader subtracts as
             # uPhase advances -- the positive form of the measured median, which
             # spread() reports as a loss because it subtracts the later frame.
+            "half_w0": _hw0,
             "drift": -drift,
             "seam_spread": spread_steps,
             "worst_escape": worst,
@@ -215,7 +261,11 @@ def main():
     args = [a for a in sys.argv[1:]]
     if "--julia" in args:
         require_perturb()
-        calibrate_julia()
+        only = None
+        if "--only" in args:
+            i = args.index("--only")
+            only = args[i + 1]
+        calibrate_julia(only)
         return
     only = None
     if "--only" in args:
@@ -273,7 +323,12 @@ def main():
             continue
 
         (drift, spread_steps), worst, hw0, floor, scale_ref = got
-        cycles = max(1, int((worst * 1.15 + 8 - pt["q"]) // pt["p"]) + 1)
+        # A wider margin for the sparse families. The budget is measured from the
+        # pixels that escaped, and the ones nearest the critical point escape last,
+        # so 1.15 leaves the slowest of them at the cap and the shader draws them
+        # black -- a hole in the middle of the frame.
+        margin = 1.15 if degree == 2 else 1.6
+        cycles = max(1, int((worst * margin + 8 - pt["q"]) // pt["p"]) + 1)
         pt["maxiter"] = pt["q"] + cycles * pt["p"]
         pt["half_w0"] = hw0
         pt["seam_spread"] = spread_steps

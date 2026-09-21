@@ -14,6 +14,9 @@ constant are identical -- only where the perturbation comes from differs.
 import json
 import sys
 
+# How much of each palette cycle to spend on the background. 1.0 is linear.
+RAMP_GAMMA = 1.7
+
 
 def binom(n, k):
     r = 1
@@ -23,12 +26,21 @@ def binom(n, k):
 
 
 def step_statements(degree, dc):
-    """The perturbation step: e <- sum_j C(d,j) Z^(d-j) e^j + dc, Horner in e.
+    """The perturbation step: e <- sum_j C(d,j) Z^(d-j) e^j + dc.
 
     Returns GLSL statements, not an expression, because GLSL multiplies vec2
     component-wise: `zn * zn` is (zn.x*zn.x, zn.y*zn.y), NOT the complex square.
-    Every power of the reference has to be written out as a complex product, or
-    the leading coefficient is wrong and the picture comes out as flat bands.
+    Every product has to be written out.
+
+    `!(m2 <= cap)` is the escape test for these degrees, not `m2 > cap`: the
+    products reach float32's range and Inf - Inf is NaN, for which both
+    comparisons are false. Testing the way round that lets NaN through leaves an
+    overflowed pixel unescaped, and the shader draws it black -- which is the
+    black disc in the middle of the degree-4 Julia renderings.
+
+    No accumulator either. Horner chains dependent float operations with a
+    cancellation in each; the degree-2 step that works is a single expression, so
+    each product is its own temporary here and the sum happens once.
 
     Degree 2 keeps the exact text it has always had, so the twelve shipped points
     regenerate byte-identical shaders rather than merely equivalent ones.
@@ -37,24 +49,44 @@ def step_statements(degree, dc):
         return ("e = vec2(2.0 * (zn.x * e.x - zn.y * e.y) + e.x * e.x - e.y * e.y%(addx)s, \\\n"
                 "                 2.0 * (zn.y * e.x + zn.x * e.y) + 2.0 * e.x * e.y%(addy)s);"
                 % dict(addx=("" if dc else " + d.x"), addy=("" if dc else " + d.y")))
-    lines = ["vec2 z2 = vec2(zn.x * zn.x - zn.y * zn.y, 2.0 * zn.x * zn.y);"]
-    powers = {0: "vec2(1.0)", 1: "zn", 2: "z2"}
+
+    lines = []
+    zp = {1: "zn"}
+    lines.append("vec2 z2 = vec2(zn.x * zn.x - zn.y * zn.y, 2.0 * zn.x * zn.y);")
+    zp[2] = "z2"
     for k in range(3, degree):
-        prev = powers[k - 1]
-        powers[k] = "z%d" % k
+        prev = zp[k - 1]
+        zp[k] = "z%d" % k
         lines.append("vec2 %s = vec2(%s.x * zn.x - %s.y * zn.y,"
-                     " %s.x * zn.y + %s.y * zn.x);" % (powers[k], prev, prev, prev, prev))
-    # Horner from the highest power down. GLSL multiplies vec2 component-wise, so
-    # the multiply by e must be a complex product as well -- writing (acc * e)
-    # squares the two parts independently and destroys the iteration.
-    coeffs = ["%r * %s" % (float(binom(degree, k + 1)), powers[degree - 1 - k])
-              for k in range(degree - 1, -1, -1)]
-    lines.append("vec2 a = %s;" % coeffs[0])
-    for c in coeffs[1:]:
-        lines.append("a = vec2(a.x * e.x - a.y * e.y + %s.x,"
-                     " a.x * e.y + a.y * e.x + %s.y);" % (c, c))
-    lines.append("e = vec2(a.x * e.x - a.y * e.y%s, a.x * e.y + a.y * e.x%s);"
-                 % ("" if dc else " + d.x", "" if dc else " + d.y"))
+                     " %s.x * zn.y + %s.y * zn.x);" % (zp[k], prev, prev, prev, prev))
+
+    ep = {1: "e"}
+    lines.append("vec2 e2 = vec2(e.x * e.x - e.y * e.y, 2.0 * e.x * e.y);")
+    ep[2] = "e2"
+    for k in range(3, degree + 1):
+        prev = ep[k - 1]
+        ep[k] = "e%d" % k
+        lines.append("vec2 %s = vec2(%s.x * e.x - %s.y * e.y,"
+                     " %s.x * e.y + %s.y * e.x);" % (ep[k], prev, prev, prev, prev))
+
+    xs, ys = [], []
+    for j in range(1, degree + 1):
+        coef = float(binom(degree, j))
+        zpow = degree - j
+        if zpow == 0:
+            name = ep[j]
+        else:
+            name = "t%d" % j
+            lines.append("vec2 %s = vec2(%s.x * %s.x - %s.y * %s.y,"
+                         " %s.x * %s.y + %s.y * %s.x);"
+                         % (name, zp[zpow], ep[j], zp[zpow], ep[j],
+                            zp[zpow], ep[j], zp[zpow], ep[j]))
+        xs.append("%r * %s.x" % (coef, name) if coef != 1.0 else "%s.x" % name)
+        ys.append("%r * %s.y" % (coef, name) if coef != 1.0 else "%s.y" % name)
+
+    lines.append("e = vec2(%s%s, %s%s);"
+                 % (" + ".join(xs), "" if dc else " + d.x",
+                    " + ".join(ys), "" if dc else " + d.y"))
     return " \\\n        ".join(lines)
 
 
@@ -134,8 +166,8 @@ const vec2 ORB[%(norb)d] = vec2[%(norb)d](
 const float LOG2 = 0.6931471805599453;
 
 vec4 palette(float t) {
-    // Cyclic four stop ramp.
-    float x = fract(t) * 4.0;
+    // Cyclic four stop ramp.%(rampnote)s
+    float x = %(ramp)s;
     vec4 a = uPal0, b = uPal1;
     if (x >= 3.0)      { a = uPal3; b = uPal0; x -= 3.0; }
     else if (x >= 2.0) { a = uPal2; b = uPal3; x -= 2.0; }
@@ -165,7 +197,7 @@ void main() {
         %(step)s \\
         iter += 1.0; \\
         m2 = dot(e, e); \\
-        if (m2 > 65536.0) esc = true; \\
+        if (%(esctest)s) esc = true; \\
     }
 
     // preperiod: a straight run of literal indices
@@ -178,7 +210,10 @@ void main() {
 #undef STEP
 
     if (!esc) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0) * qt_Opacity;
+        // Nothing escaped within the budget. Black here is a hole in the picture;
+        // the far colour is the background the pixel belongs to, so the worst case
+        // is a dark pixel.%(d2black)s
+        fragColor = vec4(vec3(0.0)%(nonesc)s, 1.0) * qt_Opacity;
         return;
     }
 
@@ -198,7 +233,22 @@ void main() {
               "\n// to it at any step." if julia else ""),
         init=("d" if julia else "vec2(0.0)"),
         step=step_statements(degree, julia),
+        ramp=("fract(t) * 4.0" if degree == 2
+              else "pow(fract(t), %r) * 4.0" % RAMP_GAMMA),
+        rampnote=("" if degree == 2 else
+                  "\n    // \n"
+                  "    // z^d + c frames are a thin web in a large background, and a linear ramp\n"
+                  "    // can only trade the background's darkness against the structure's contrast.\n"
+                  "    // The gamma spends the low end of each cycle on the background and expands\n"
+                  "    // the rest onto the structure, so both are available at once. Degree 2 is\n"
+                  "    // a dense frame and needs none of this, so it keeps the linear ramp."),
         degreeNorm=("" if degree == 2 else " / log2(%d.0)" % degree),
+        esctest=("m2 > 65536.0" if degree == 2 else "!(m2 <= 65536.0)"),
+        nonesc=("" if degree == 2 else " + palette(0.0).rgb"),
+        d2black=("" if degree == 2 else
+                 "\n        //\n"
+                 "        // Degree 2 frames are dense and its interior is meant to be black,\n"
+                 "        // so it keeps that."),
         degreeComment=("" if degree == 2 else
                        "    // The potential goes as log_degree, and this point is\n"
                        "    // degree %d, so the escape count is normalised by it.\n" % degree),
@@ -209,7 +259,11 @@ void main() {
         # out mid-ramp and floods the picture with the wrong colour.
         drift=variant["drift"] if variant else p,
         driftnote=("== twice the period" if julia else "== period"),
-        halfw=pt["half_w0"],
+        # The Julia rendering can carry its own start depth: its offset is the
+        # pixel's position within the view, so a view narrower than the reference's
+        # float32 rounding error renders noise.
+        halfw=(variant["half_w0"] if variant and "half_w0" in variant
+               else pt["half_w0"]),
         palscale=variant["pal_scale"] if variant else pt["pal_scale"],
         paloffset=variant["pal_offset"] if variant else pt["pal_offset"],
         pre="".join("    if (!esc) STEP(%d);\n" % i for i in range(q)),

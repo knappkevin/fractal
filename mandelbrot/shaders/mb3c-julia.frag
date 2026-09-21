@@ -35,13 +35,13 @@ layout(std140, binding = 0) uniform buf {
     vec4 uPal3;
 };
 
-#define CYCLES 51          // whole periods actually iterated
+#define CYCLES 71          // whole periods actually iterated
 
 // The point's own constants, baked in: nothing outside this file needs to know
 // them, and the camera must match them exactly or the loop will not close.
 #define OCT_PER_LOOP 4.0995886250210365    // log2 |lambda|, octaves of zoom per loop
 #define ROT_PER_LOOP 0.40648319574387615    // 1 - arg(lambda)/2pi, turns per loop
-#define PAL_SCALE 0.023127      // palette cycles per escape step, from the point's own range
+#define PAL_SCALE 0.06938      // palette cycles per escape step, from the point's own range
 #define PAL_OFFSET 75.658     // escape count that sits on the first palette stop
 #define DRIFT 15.0         // escape steps gained over one loop, == twice the period
 #define HALF_W0 5.960464477539062e-07       // half width of the view at phase 0
@@ -60,7 +60,13 @@ const float LOG2 = 0.6931471805599453;
 
 vec4 palette(float t) {
     // Cyclic four stop ramp.
-    float x = fract(t) * 4.0;
+    // 
+    // z^d + c frames are a thin web in a large background, and a linear ramp
+    // can only trade the background's darkness against the structure's contrast.
+    // The gamma spends the low end of each cycle on the background and expands
+    // the rest onto the structure, so both are available at once. Degree 2 is
+    // a dense frame and needs none of this, so it keeps the linear ramp.
+    float x = pow(fract(t), 1.7) * 4.0;
     vec4 a = uPal0, b = uPal1;
     if (x >= 3.0)      { a = uPal3; b = uPal0; x -= 3.0; }
     else if (x >= 2.0) { a = uPal2; b = uPal3; x -= 2.0; }
@@ -88,13 +94,14 @@ void main() {
 #define STEP(I) { \
         zn = ORB[I]; \
         vec2 z2 = vec2(zn.x * zn.x - zn.y * zn.y, 2.0 * zn.x * zn.y); \
-        vec2 a = 1.0 * vec2(1.0); \
-        a = vec2(a.x * e.x - a.y * e.y + 3.0 * zn.x, a.x * e.y + a.y * e.x + 3.0 * zn.y); \
-        a = vec2(a.x * e.x - a.y * e.y + 3.0 * z2.x, a.x * e.y + a.y * e.x + 3.0 * z2.y); \
-        e = vec2(a.x * e.x - a.y * e.y, a.x * e.y + a.y * e.x); \
+        vec2 e2 = vec2(e.x * e.x - e.y * e.y, 2.0 * e.x * e.y); \
+        vec2 e3 = vec2(e2.x * e.x - e2.y * e.y, e2.x * e.y + e2.y * e.x); \
+        vec2 t1 = vec2(z2.x * e.x - z2.y * e.y, z2.x * e.y + z2.y * e.x); \
+        vec2 t2 = vec2(zn.x * e2.x - zn.y * e2.y, zn.x * e2.y + zn.y * e2.x); \
+        e = vec2(3.0 * t1.x + 3.0 * t2.x + e3.x, 3.0 * t1.y + 3.0 * t2.y + e3.y); \
         iter += 1.0; \
         m2 = dot(e, e); \
-        if (m2 > 65536.0) esc = true; \
+        if (!(m2 <= 65536.0)) esc = true; \
     }
 
     // preperiod: a straight run of literal indices
@@ -114,7 +121,13 @@ void main() {
 #undef STEP
 
     if (!esc) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0) * qt_Opacity;
+        // Nothing escaped within the budget. Black here is a hole in the picture;
+        // the far colour is the background the pixel belongs to, so the worst case
+        // is a dark pixel.
+        //
+        // Degree 2 frames are dense and its interior is meant to be black,
+        // so it keeps that.
+        fragColor = vec4(vec3(0.0) + palette(0.0).rgb, 1.0) * qt_Opacity;
         return;
     }
 

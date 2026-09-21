@@ -105,7 +105,10 @@ void main() {
 #undef STEP
 
     if (!esc) {
-        fragColor = vec4(0.0, 0.0, 0.0, 1.0) * qt_Opacity;
+        // Nothing escaped within the budget. Black here is a hole in the picture;
+        // the far colour is the background the pixel belongs to, so the worst case
+        // is a dark pixel.
+        fragColor = vec4(vec3(0.0), 1.0) * qt_Opacity;
         return;
     }
 

@@ -9,7 +9,7 @@
   "arg_lambda_turns": 0.21250471949558727,
   "oct_per_loop": 4.630597183088109,
   "rot_per_loop": 0.7874952805044128,
-  "maxiter": 242,
+  "maxiter": 334,
   "orbit": [
     [
       0.0,
@@ -36,18 +36,19 @@
       -0.49598758748705846
     ]
   ],
-  "half_w0": 5.960464477539062e-07,
+  "half_w0": 4.6566128730773926e-09,
   "seam_spread": 0.000213623046875,
   "seam_drift": -4.0,
   "worst_escape": 202.5,
   "pal_scale": 0.024691,
-  "pal_offset": 17.387,
+  "pal_offset": 24.43,
   "julia": {
+    "half_w0": 5.960464477539062e-07,
     "drift": 16.0,
     "seam_spread": 0.0,
     "worst_escape": 170.2,
-    "maxiter": 206,
-    "pal_scale": 0.029377,
+    "maxiter": 282,
+    "pal_scale": 0.088132,
     "pal_offset": 71.813
   }
 }
