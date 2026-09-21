@@ -39,12 +39,12 @@ QtObject {
     bands: 1.0,              // multiplier on the fractal's own colour band frequency
     randomPoint: true,       // start on a different point each launch
     paused: false,           // hold the animation still
-    pauseWhenCovered: false, // ...while windows cover the whole screen
+    pauseWhenCovered: true, // ...while windows cover the whole screen
     markers: true,
     poll: false,
     screensaver: false,      // show this fractal as the idle screensaver
     mode: "both", // "mandel", "julia", or "both",
-    power: 2                 // the family: z^2 + c, z^3 + c or z^4 + c
+    power: 2                 // the degree: z^2 + c, z^3 + c or z^4 + c
   })
 
   function defaultsFor(key) {
@@ -175,7 +175,7 @@ QtObject {
     return (m === "julia" || m === "both") ? m : "mandel"
   }
 
-  // Which family. Anything outside 2..4 falls back to the Mandelbrot set, which
+  // Which degree. Anything outside 2..4 falls back to the Mandelbrot set, which
   // is the one the plugin has always drawn.
   readonly property int powers: {
     var v = Math.round(Number(raw("power")))

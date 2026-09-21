@@ -13,8 +13,9 @@ import Quickshell.Io
 //
 // Each point renders two ways -- the Mandelbrot set at it, and the Julia set of
 // its parameter -- and the *name* says which: `<point>` or `<point>-julia`. So
-// a pick survives a mode change, `point list` can offer 12 names or 24, and one
-// name is enough to choose both the shader and the data.
+// a pick survives a mode change, `point list` can offer a name per rendering or
+// a name per place, and one name is enough to choose both the shader and the
+// data.
 QtObject {
   id: catalogue
 
@@ -23,7 +24,7 @@ QtObject {
   // Which renderings to offer: "mandel", "julia", or "both".
   property string mode: "mandel"
 
-  // Which family: z^2 + c, z^3 + c or z^4 + c. Each degree has Misiurewicz
+  // Which degree: z^2 + c, z^3 + c or z^4 + c. Each degree has Misiurewicz
   // points of its own, so this selects which of them are offered rather than
   // being a dial on any one of them.
   property int power: 2
@@ -40,6 +41,11 @@ QtObject {
   // array: a bound array read from another component's binding is what made QML
   // report a binding loop on `point` earlier, and there is no need to risk it.
   property var variants: ["snowflake"]
+
+  // One name per place, whatever the mode. The panel lists these rather than
+  // `variants`: the Drawing row already says which rendering is showing, so
+  // offering `antler` and `antler-julia` as two places says it twice.
+  property var places: ["snowflake"]
 
   // Degree 2 for a point file written before degrees existed, or one that did
   // not record it.
@@ -75,6 +81,11 @@ QtObject {
         if (powerOf(names[i]) === use)
           out.push(names[i] + suffixes[s])
     variants = out.length ? out : ["snowflake"]
+    var pl = []
+    for (var k = 0; k < names.length; k++)
+      if (powerOf(names[k]) === use)
+        pl.push(names[k])
+    places = pl.length ? pl : ["snowflake"]
     // The fallback has to be a point this degree offers, or a pick would
     // resolve to a name the catalogue cannot draw.
     if (names.indexOf(fallback) < 0 || powerOf(fallback) !== use)
@@ -102,6 +113,13 @@ QtObject {
 
   function has(name) {
     return variants.indexOf(String(name)) >= 0
+  }
+
+  // Either a rendering (`antler`, `antler-julia`) or a place (`antler`), which
+  // is what the panel picks. Answered here so the IPC verb, the panel and the
+  // service cannot disagree about which names are acceptable.
+  function knows(name) {
+    return has(name) || places.indexOf(String(name)) >= 0
   }
 
   // How far one loop zooms for this point. Used only for pacing; the renderer

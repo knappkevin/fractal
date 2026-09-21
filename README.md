@@ -1,6 +1,7 @@
 # Fractal Wallpaper + Screensaver Plugin for Omarchy
 
-An infinite zoom into a fractal, colored by your theme. Features 12 different Misiurewicz points in the Mandelbrot set and a Julia set at each one. Not very lightweight.
+An infinite zoom into a fractal, colored by your theme. Features Misiurewicz points from the Mandelbrot set and the higher-degree
+Multibrots, with a Julia set at each one. Not very lightweight.
 
 ## Install
 

@@ -20,6 +20,16 @@ PanelWindow {
 
   readonly property bool showing: service !== null && service.menuOpen
 
+  // The number is the degree of z^d + c. Degree 2 is the Mandelbrot set; 3 and 4
+  // are the Multibrots, named for that same number, so the row can say what it is
+  // instead of showing a bare 2, 3 or 4.
+  function degreeOption(d) {
+    if (d === 2) return { value: "2", label: "Mandelbrot Set (z² + c)" }
+    if (d === 3) return { value: "3", label: "Cubic Multibrot (z³ + c)" }
+    if (d === 4) return { value: "4", label: "Quartic Multibrot (z⁴ + c)" }
+    return { value: String(d), label: "Degree " + d }
+  }
+
   visible: showing
   anchors { top: true; bottom: true; left: true; right: true }
   color: "transparent"
@@ -189,23 +199,29 @@ PanelWindow {
               label: "Drawing"
               width: parent.width
               value: menu.service.mode
-              options: ["mandel", "julia", "both"]
+              // Titles, not the stored words: "mandel" and "julia" are what the
+              // setting holds, not what the sets are called.
+              options: [
+                { value: "mandel", label: "Mandelbrot Set" },
+                { value: "julia", label: "Julia Set" },
+                { value: "both", label: "Both" }
+              ]
               onChanged: function(v) { menu.service.setMode(v) }
             }
 
             Dropdown {
-              label: "Family"
+              label: "Degree"
               width: parent.width
               value: String(menu.service.settingsStore.powers)
-              options: menu.service.pointDegrees.map(function(d) { return String(d) })
+              options: menu.service.pointDegrees.map(function(d) { return menu.degreeOption(d) })
               onChanged: function(v) { menu.service.setPower(v) }
             }
 
             Dropdown {
               label: "Place in the set"
               width: parent.width
-              value: menu.service.point
-              options: menu.service.pointNames
+              value: menu.service.place
+              options: menu.service.pointPlaces
               onChanged: function(v) { menu.service.choose(v) }
             }
 

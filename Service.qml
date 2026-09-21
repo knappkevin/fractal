@@ -216,10 +216,17 @@ Item {
   // -- is a cycle, and QML reported it as one.
   function resolvedPoint() {
     var want = String(sessionPoint || settings.namedPoint || "")
-    // Asked of the catalogue, so a name the current mode does not offer -- a
-    // Julia pick while in Mandelbrot mode, say -- resolves to that mode's
-    // default rather than showing nothing.
-    return catalogue.has(want) ? want : catalogue.defaultVariant
+    if (catalogue.has(want))
+      return want
+    // A place rather than a rendering, which is what the panel picks: resolve it
+    // to whichever rendering this mode offers for it. Only a name this mode
+    // cannot draw at all -- a place outside the current degree, say -- falls
+    // back to the mode's default, because showing nothing is worse.
+    var julia = catalogue.base(want) + catalogue.juliaSuffix
+    if (catalogue.has(julia))
+      return julia
+    return catalogue.has(catalogue.base(want)) ? catalogue.base(want)
+                                               : catalogue.defaultVariant
   }
 
   readonly property string point: resolvedPoint()
@@ -246,7 +253,9 @@ Item {
   // Switching point changes the loop, so start it from the top rather than
   // part-way through a shape the new point does not share.
   function choose(name) {
-    if (!catalogue.has(name))
+    // A place or a rendering: the panel picks places, `point <name>` may be
+    // either, and both are stored as given so the pick survives a mode change.
+    if (!catalogue.knows(name))
       return
     settings.set({ point: name })
     sessionPoint = name
@@ -596,12 +605,12 @@ Item {
       if (value === "get" || value === "")
         return root.point
       if (value === "list")
-        return catalogue.variants.join(" ")
+        return catalogue.places.join(" ")
       if (value === "next")
         return root.chooseAndReport(catalogue.next(root.point))
       if (value === "random")
         return root.chooseAndReport(catalogue.another(root.point))
-      if (!catalogue.has(value))
+      if (!catalogue.knows(value))
         return "unknown point '" + value + "'; try: fractal point list"
       return root.chooseAndReport(value)
     }
@@ -666,7 +675,11 @@ Item {
   readonly property alias settingsStore: settings
 
   // What the panel needs from the catalogue, which is likewise an id.
-  readonly property var pointNames: catalogue.variants
+  readonly property var pointPlaces: catalogue.places
+
+  // Where the current rendering sits, which is what the panel's place row shows
+  // and selects. The rendering itself is the Drawing row's business.
+  readonly property string place: catalogue.base(point)
 
   // The degrees the catalogue can actually draw, for the panel's control.
   readonly property var pointDegrees: catalogue.availablePowers
