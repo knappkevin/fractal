@@ -356,6 +356,7 @@ Item {
   // no screensaver at all and nothing left to explain why.
   // ----------------------------------------------------------------------
   property bool omarchyScreensaverOff: false
+  property bool stayAwake: false
   property bool leverKnown: false
   property bool warnedAboutLever: false
   property bool screensaverShowing: false
@@ -363,8 +364,16 @@ Item {
   readonly property string leverPath:
     home + "/.local/state/omarchy/toggles/screensaver-off"
 
+  // The bar's stay-awake indicator is the other lever over the same idle timeout,
+  // and it is not an idle inhibitor: a client inhibitor is what `respectInhibitors`
+  // covers, a different mechanism entirely. So its flag has to be read the same way
+  // the screensaver lever is, or this plugin can cover a screen the user has asked
+  // to stay awake.
+  readonly property string stayAwakePath:
+    home + "/.local/state/omarchy/indicators/stay-awake"
+
   readonly property bool screensaverArmed:
-    settings.screensaver && omarchyScreensaverOff
+    settings.screensaver && omarchyScreensaverOff && !stayAwake
 
   // A flag file that may well not exist, so it is asked rather than watched: a
   // FileView cannot arm on a path that is not there. `test -e` rather than the
@@ -379,12 +388,32 @@ Item {
     }
   }
 
+  // The same probe one directory over. The flag can also be set while the fractal
+  // is already up, and disabling the monitor does not take a window down with it,
+  // so that case is dismissed here -- what Omarchy's own service does when it
+  // cancels a cycle for stay-awake.
+  Process {
+    id: stayAwakeLever
+    command: ["/usr/bin/test", "-e", root.stayAwakePath]
+    onExited: function(code) {
+      var held = code === 0
+      if (held === root.stayAwake)
+        return
+      root.stayAwake = held
+      if (held)
+        root.screensaverShowing = false
+    }
+  }
+
   Timer {
     interval: 5000
     repeat: true
     running: true
     triggeredOnStart: true
-    onTriggered: if (!saverLever.running) saverLever.running = true
+    onTriggered: {
+      if (!saverLever.running) saverLever.running = true
+      if (!stayAwakeLever.running) stayAwakeLever.running = true
+    }
   }
 
   // Turns Omarchy's own screensaver off, once. Its command flips a flag rather
